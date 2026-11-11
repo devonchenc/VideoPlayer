@@ -7,6 +7,7 @@ class CPlayerWindow
 public:
     bool Create(HWND parentWnd);
     void Destroy();
+    HRESULT Resize(UINT width, UINT height);
     HWND GetHandle() const noexcept { return m_hwnd; }
 
 private:

@@ -18,7 +18,7 @@ HRESULT CVideoPlayer::Initialize(HWND parentWnd)
     if (FAILED(hr))
         return hr;
 
-    // 3. Start rendering thread
+    // Start rendering thread
     StartRendering();
 
     return S_OK;
@@ -26,13 +26,27 @@ HRESULT CVideoPlayer::Initialize(HWND parentWnd)
 
 HRESULT CVideoPlayer::SetWindowPos(RECT newWindowPos)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    {
+        std::lock_guard lock(m_mutex);
 
-    if (m_shutdown)
-        return E_ABORT;
+        if (m_shutdown)
+            return E_ABORT;
 
-    m_windowPos = newWindowPos;
-    return m_renderer.Resize(m_windowPos.right - m_windowPos.left, m_windowPos.bottom - m_windowPos.top);
+        m_windowPos = newWindowPos;
+        const UINT width = m_windowPos.right - m_windowPos.left;
+        const UINT height = m_windowPos.bottom - m_windowPos.top;
+        m_pendingWidth = width;
+        m_pendingHeight = height;
+        m_resizePending = true;
+
+        HRESULT hr = m_playerWindow.Resize(width, height);
+        if (FAILED(hr))
+            return hr;
+    }
+
+    m_cv.notify_one();
+
+    return S_OK;
 }
 
 void CVideoPlayer::Shutdown()
@@ -72,7 +86,40 @@ void CVideoPlayer::RenderThread(std::stop_token stopToken)
 {
     while (!stopToken.stop_requested())
     {
-        m_renderer.Clear();
+        UINT width = 0;
+        UINT height = 0;
+        bool resizePending = false;
+
+        {
+            std::unique_lock lock(m_mutex);
+
+            m_cv.wait_for(lock, stopToken, std::chrono::milliseconds(1), [this]{ return m_resizePending; });
+
+            if (stopToken.stop_requested())
+                break;
+
+            if (m_resizePending)
+            {
+                width = m_pendingWidth;
+                height = m_pendingHeight;
+
+                m_resizePending = false;
+                resizePending = true;
+            }
+        }
+
+        if (resizePending)
+        {
+            // Window is minimized
+            if (width == 0 || height == 0)
+                continue;
+
+            HRESULT hr = m_renderer.Resize(width, height);
+            if (FAILED(hr))
+                continue;
+        }
+
+        m_renderer.Render();
 
         std::this_thread::sleep_for(std::chrono::milliseconds(16));
     }

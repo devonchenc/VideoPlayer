@@ -27,9 +27,7 @@ HRESULT CD3D12Renderer::Resize(UINT width, UINT height)
         return S_FALSE;
 
     if (!m_swapChain)
-    {
         return InitializeSwapChain(width, height);
-    }
 
     if (width == m_width && height == m_height)
         return S_OK;
@@ -50,8 +48,6 @@ HRESULT CD3D12Renderer::Resize(UINT width, UINT height)
 
     m_width = width;
     m_height = height;
-    
-    m_frameIndex = m_swapChain->GetCurrentBackBufferIndex();
 
     // Recreate render target views
     return CreateRenderTargetViews();
@@ -64,8 +60,8 @@ void CD3D12Renderer::Shutdown()
 
     m_commandList.Reset();
 
-    for (auto& allocator : m_commandAllocators)
-        allocator.Reset();
+    for (auto& frame : m_frames)
+        frame.commandAllocator.Reset();
 
     for (auto& target : m_renderTargets)
         target.Reset();
@@ -88,12 +84,12 @@ HRESULT CD3D12Renderer::CreateCommandObjects()
 
     for (UINT i = 0; i < FRAME_COUNT; ++i)
     {
-        hr = m_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&m_commandAllocators[i]));
+        hr = m_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&m_frames[i].commandAllocator));
         if (FAILED(hr))
             return hr;
     }
 
-    hr = m_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, m_commandAllocators[0].Get(), nullptr, IID_PPV_ARGS(&m_commandList));
+    hr = m_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, m_frames[0].commandAllocator.Get(), nullptr, IID_PPV_ARGS(&m_commandList));
     if (FAILED(hr))
         return hr;
 
@@ -157,8 +153,6 @@ HRESULT CD3D12Renderer::CreateSwapChain(HWND hwnd)
     if (FAILED(hr))
         return hr;
 
-    m_frameIndex = m_swapChain->GetCurrentBackBufferIndex();
-
     // Disable Alt+Enter fullscreen switching
     return m_factory->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER);
 }
@@ -171,6 +165,7 @@ HRESULT CD3D12Renderer::CreateRenderTargetViews()
     heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     heapDesc.NodeMask = 0;
 
+    m_rtvHeap.Reset();
     HRESULT hr = m_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&m_rtvHeap));
     if (FAILED(hr))
         return hr;
@@ -221,22 +216,36 @@ HRESULT CD3D12Renderer::WaitForGpu()
     return S_OK;
 }
 
-void CD3D12Renderer::Clear()
+void CD3D12Renderer::Render()
 {
     if (!m_swapChain)
         return;
 
     const UINT backBufferIndex = m_swapChain->GetCurrentBackBufferIndex();
-    ComPtr<ID3D12Resource>& backBuffer = m_renderTargets[backBufferIndex];
+    FrameContext& frame = m_frames[backBufferIndex];
 
-    HRESULT hr = m_commandAllocators[backBufferIndex]->Reset();
+    // Wait until previous GPU work is completed
+    HRESULT hr = WaitForFrame(frame);
     if (FAILED(hr))
+    {
+        OutputDebugStringW(L"Wait for frame failed\n");
         return;
+    }
+
+    // Reset command allocator
+    hr = frame.commandAllocator->Reset();
+    if (FAILED(hr))
+    {
+        OutputDebugStringW(L"Command allocator reset failed\n");
+        return;
+    }
 
     // Reset command list
-    hr = m_commandList->Reset(m_commandAllocators[backBufferIndex].Get(), nullptr);
+    hr = m_commandList->Reset(frame.commandAllocator.Get(), nullptr);
     if (FAILED(hr))
         return;
+
+    ComPtr<ID3D12Resource>& backBuffer = m_renderTargets[backBufferIndex];
 
     // Transition: PRESENT -> RENDER_TARGET
     D3D12_RESOURCE_BARRIER barrier{};
@@ -250,13 +259,7 @@ void CD3D12Renderer::Clear()
     m_commandList->ResourceBarrier(1, &barrier);
 
     // Clear render target to black
-    constexpr float clearColor[] = {
-        1.0f,  // Red
-        0.0f,  // Green
-        0.0f,  // Blue
-        1.0f   // Alpha
-    };
-
+    constexpr float clearColor[] = { 0.0f, 0.0f, 0.0f, 1.0f };
     m_commandList->ClearRenderTargetView(m_rtvHandles[backBufferIndex], clearColor, 0, nullptr);
 
     // Transition: RENDER_TARGET -> PRESENT
@@ -268,11 +271,23 @@ void CD3D12Renderer::Clear()
     // Close command list
     hr = m_commandList->Close();
     if (FAILED(hr))
+    {
+        OutputDebugStringW(L"CommandList Close failed\n");
         return;
+    }
 
     // Execute command list
     ID3D12CommandList* commandLists[] = { m_commandList.Get() };
     m_commandQueue->ExecuteCommandLists(1, commandLists);
+
+    // Signal GPU completion for this frame
+    const UINT64 fenceValue = ++m_fenceValue;
+
+    hr = m_commandQueue->Signal(m_fence.Get(), fenceValue);
+    if (FAILED(hr))
+        return;
+
+    frame.fenceValue = fenceValue;
 
     // Present
     hr = m_swapChain->Present(1, 0);
@@ -281,4 +296,29 @@ void CD3D12Renderer::Clear()
         OutputDebugStringW(L"Present failed\n");
         return;
     }
+}
+
+HRESULT CD3D12Renderer::WaitForFrame(FrameContext& frame)
+{
+    if (frame.fenceValue == 0)
+        return S_OK;
+
+    const UINT64 completedValue = m_fence->GetCompletedValue();
+    if (completedValue == UINT64_MAX)
+        return DXGI_ERROR_DEVICE_REMOVED;
+
+    if (completedValue >= frame.fenceValue)
+        return S_OK;
+
+    HRESULT hr = m_fence->SetEventOnCompletion(frame.fenceValue, m_fenceEvent);
+    if (FAILED(hr))
+        return hr;
+
+    const DWORD result = WaitForSingleObject(m_fenceEvent, INFINITE);
+    if (result != WAIT_OBJECT_0)
+    {
+        return HRESULT_FROM_WIN32(result == WAIT_FAILED ? GetLastError() : ERROR_GEN_FAILURE);
+    }
+
+    return S_OK;
 }

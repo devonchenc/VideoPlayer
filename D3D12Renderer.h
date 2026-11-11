@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <mutex>
 
 #include <Windows.h>
 #include <wrl/client.h>
@@ -12,6 +13,12 @@
 #pragma comment(lib, "dxgi.lib")
 
 using Microsoft::WRL::ComPtr;
+
+struct FrameContext
+{
+    ComPtr<ID3D12CommandAllocator> commandAllocator;
+    UINT64 fenceValue{ 0 };
+};
 
 namespace
 {
@@ -24,7 +31,7 @@ public:
     HRESULT Initialize(HWND hwnd);
     HRESULT Resize(UINT width, UINT height);
     void Shutdown();
-    void Clear();
+    void Render();
 
 private:
     HRESULT InitializeSwapChain(UINT width, UINT height);
@@ -32,6 +39,7 @@ private:
     HRESULT CreateSwapChain(HWND hwnd);
     HRESULT CreateRenderTargetViews();
     HRESULT WaitForGpu();
+    HRESULT WaitForFrame(FrameContext& frame);
 
 private:
     HWND m_hwnd;
@@ -44,12 +52,11 @@ private:
     D3D12_CPU_DESCRIPTOR_HANDLE m_rtvHandles[FRAME_COUNT]{};
 
     std::array<ComPtr<ID3D12Resource>, FRAME_COUNT> m_renderTargets;
-    std::array<ComPtr<ID3D12CommandAllocator>, FRAME_COUNT> m_commandAllocators;
+    std::array<FrameContext, FRAME_COUNT> m_frames;
     ComPtr<ID3D12GraphicsCommandList> m_commandList;
     ComPtr<ID3D12Fence> m_fence;
 
     UINT m_rtvDescriptorSize{ 0 };
-    UINT m_frameIndex{ 0 };
 
     UINT64 m_fenceValue{ 0 };
     HANDLE m_fenceEvent{ nullptr };
