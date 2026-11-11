@@ -103,16 +103,16 @@ HRESULT CPlayerGlobalContext::InitializeD3D12()
     }
 #endif
 
-    // 1. Create DXGI Factory
+    // Create DXGI Factory
     HRESULT hr = CreateDXGIFactory2(factoryFlags, IID_PPV_ARGS(&m_factory));
     if (FAILED(hr))
         return hr;
 
-    // 2. Select GPU Adapter
+    // Select GPU Adapter
     for (UINT index = 0; ; ++index)
     {
         ComPtr<IDXGIAdapter1> adapter;
-        hr = m_factory->EnumAdapters1(index, &adapter);
+        hr = m_factory->EnumAdapterByGpuPreference(index, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, IID_PPV_ARGS(&adapter));
         if (hr == DXGI_ERROR_NOT_FOUND)
             break;
 
@@ -121,10 +121,10 @@ HRESULT CPlayerGlobalContext::InitializeD3D12()
 
         DXGI_ADAPTER_DESC1 desc{};
         adapter->GetDesc1(&desc);
+
         if (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)
             continue;
 
-        // 3. Check D3D12 support
         hr = D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, __uuidof(ID3D12Device), nullptr);
         if (FAILED(hr))
             continue;
@@ -136,10 +136,10 @@ HRESULT CPlayerGlobalContext::InitializeD3D12()
     if (!m_adapter)
         return DXGI_ERROR_UNSUPPORTED;
 
-    // 4. Create shared D3D12 Device
+    // Create shared D3D12 Device
     hr = D3D12CreateDevice(m_adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&m_device));
 
-    // 5. Create command queue
+    // Create command queue
     D3D12_COMMAND_QUEUE_DESC queueDesc{};
     queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
     queueDesc.Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;
