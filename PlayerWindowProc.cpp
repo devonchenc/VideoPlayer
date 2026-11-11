@@ -1,18 +1,28 @@
 #include "PlayerWindowProc.h"
 
-#include "VideoPlayer.h"
+#include "PlayerInstance.h"
 
 LRESULT CALLBACK PlayerWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
-    CVideoPlayer* player = reinterpret_cast<CVideoPlayer*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    CPlayerInstance* player = reinterpret_cast<CPlayerInstance*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
 
     switch (message)
     {
     case WM_NCCREATE:
     {
         const CREATESTRUCTW* createStruct = reinterpret_cast<CREATESTRUCTW*>(lParam);
-        CVideoPlayer* player = static_cast<CVideoPlayer*>(createStruct->lpCreateParams);
-        SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(player));
+        CPlayerInstance* player = static_cast<CPlayerInstance*>(createStruct->lpCreateParams);
+        if (!player)
+            return FALSE;
+
+        SetLastError(ERROR_SUCCESS);
+        LONG_PTR previousValue = SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(player));
+        if (previousValue == 0)
+        {
+            const DWORD error = GetLastError();
+            if (error != ERROR_SUCCESS)
+                return FALSE;
+        }
 
         return TRUE;
     }
@@ -23,10 +33,9 @@ LRESULT CALLBACK PlayerWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM
         {
             const int width = LOWORD(lParam);
             const int height = HIWORD(lParam);
-
             if (width > 0 && height > 0)
             {
-                //player->OnWindowSizeChanged(width, height);
+                //player->SetWindowPos(RECT(0, 0, width, height));
             }
         }
 

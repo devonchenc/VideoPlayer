@@ -195,11 +195,10 @@
     <ClInclude Include="MainFrm.h" />
     <ClInclude Include="PlayerGlobalContext.h" />
     <ClInclude Include="PlayerManager.h" />
-    <ClInclude Include="PlayerWindow.h" />
     <ClInclude Include="PlayerWindowProc.h" />
     <ClInclude Include="Resource.h" />
     <ClInclude Include="targetver.h" />
-    <ClInclude Include="VideoPlayer.h" />
+    <ClInclude Include="PlayerInstance.h" />
     <ClInclude Include="VideoPlayerApp.h" />
     <ClInclude Include="VideoPlayerDoc.h" />
     <ClInclude Include="VideoPlayerView.h" />
@@ -210,9 +209,8 @@
     <ClCompile Include="Interface.cpp" />
     <ClCompile Include="MainFrm.cpp" />
     <ClCompile Include="PlayerGlobalContext.cpp" />
-    <ClCompile Include="PlayerWindow.cpp" />
     <ClCompile Include="PlayerWindowProc.cpp" />
-    <ClCompile Include="VideoPlayer.cpp" />
+    <ClCompile Include="PlayerInstance.cpp" />
     <ClCompile Include="VideoPlayerApp.cpp" />
     <ClCompile Include="VideoPlayerDoc.cpp" />
     <ClCompile Include="VideoPlayerView.cpp" />

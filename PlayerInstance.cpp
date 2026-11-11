@@ -1,20 +1,27 @@
-#include "VideoPlayer.h"
+#include "PlayerInstance.h"
 
-CVideoPlayer::~CVideoPlayer()
+CPlayerInstance::~CPlayerInstance()
 {
     StopRendering();
     m_renderer.Shutdown();
-    m_playerWindow.Destroy();
+
+    if (m_hwnd)
+    {
+        DestroyWindow(m_hwnd);
+        m_hwnd = nullptr;
+    }
 }
 
-HRESULT CVideoPlayer::Initialize(HWND parentWnd)
+HRESULT CPlayerInstance::Initialize(HWND parentWnd)
 {
     // Create child window
-    if (!m_playerWindow.Create(parentWnd))
+    m_hwnd = CreateWindowExW(0, L"VideoPlayerWindow", nullptr, WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS, 0, 0, 0, 0,
+        parentWnd, nullptr, GetModuleHandleW(nullptr), this);
+    if (m_hwnd == nullptr)
         return HRESULT_FROM_WIN32(GetLastError());
 
     // Initialize D3D12 renderer
-    HRESULT hr = m_renderer.Initialize(m_playerWindow.GetHandle());
+    HRESULT hr = m_renderer.Initialize(m_hwnd);
     if (FAILED(hr))
         return hr;
 
@@ -26,8 +33,11 @@ HRESULT CVideoPlayer::Initialize(HWND parentWnd)
     return S_OK;
 }
 
-HRESULT CVideoPlayer::SetWindowPos(RECT newWindowPos)
+HRESULT CPlayerInstance::SetWindowPos(RECT newWindowPos)
 {
+    if (!m_hwnd || !IsWindow(m_hwnd))
+        return E_HANDLE;
+
     UINT width = 0;
     UINT height = 0;
 
@@ -40,9 +50,8 @@ HRESULT CVideoPlayer::SetWindowPos(RECT newWindowPos)
         height = m_windowPos.bottom - m_windowPos.top;
     }
 
-    HRESULT hr = m_playerWindow.Resize(width, height);
-    if (FAILED(hr))
-        return hr;
+    if (!::SetWindowPos(m_hwnd, nullptr, 0, 0, width, height, SWP_NOZORDER | SWP_NOACTIVATE))
+        return HRESULT_FROM_WIN32(GetLastError());
 
     m_commandQueue.Push({ PlayerCommandType::Resize, width, height });
 
@@ -51,31 +60,31 @@ HRESULT CVideoPlayer::SetWindowPos(RECT newWindowPos)
     return S_OK;
 }
 
-HRESULT CVideoPlayer::Play()
+HRESULT CPlayerInstance::Play()
 {
     m_commandQueue.Push(PlayerCommand{ PlayerCommandType::Play });
     return S_OK;
 }
 
-HRESULT CVideoPlayer::Pause()
+HRESULT CPlayerInstance::Pause()
 {
     m_commandQueue.Push(PlayerCommand{ PlayerCommandType::Pause });
     return S_OK;
 }
 
-HRESULT CVideoPlayer::Resume()
+HRESULT CPlayerInstance::Resume()
 {
     m_commandQueue.Push(PlayerCommand{ PlayerCommandType::Resume });
     return S_OK;
 }
 
-HRESULT CVideoPlayer::Stop()
+HRESULT CPlayerInstance::Stop()
 {
     m_commandQueue.Push(PlayerCommand{ PlayerCommandType::Stop });
     return S_OK;
 }
 
-void CVideoPlayer::Shutdown()
+void CPlayerInstance::Shutdown()
 {
     StopRendering();
 
@@ -84,16 +93,14 @@ void CVideoPlayer::Shutdown()
     //    m_player->Stop();
     //    m_player.reset();
     //}
-
-    m_playerWindow.Destroy();
 }
 
-void CVideoPlayer::StartRendering()
+void CPlayerInstance::StartRendering()
 {
     m_renderThread = std::jthread([this](std::stop_token stopToken) { RenderThread(stopToken); });
 }
 
-void CVideoPlayer::StopRendering()
+void CPlayerInstance::StopRendering()
 {
     if (m_renderThread.joinable())
     {
@@ -103,7 +110,7 @@ void CVideoPlayer::StopRendering()
     }
 }
 
-void CVideoPlayer::RenderThread(std::stop_token stopToken)
+void CPlayerInstance::RenderThread(std::stop_token stopToken)
 {
     while (!stopToken.stop_requested())
     {
@@ -139,7 +146,7 @@ void CVideoPlayer::RenderThread(std::stop_token stopToken)
     m_renderer.Shutdown();
 }
 
-void CVideoPlayer::ProcessCommand(const PlayerCommand& command)
+void CPlayerInstance::ProcessCommand(const PlayerCommand& command)
 {
     switch (command.type)
     {

@@ -5,7 +5,6 @@
 #include <thread>
 #include "CommandQueue.h"
 #include "D3D12Renderer.h"
-#include "PlayerWindow.h"
 
 enum class PlayerCommandType
 {
@@ -31,16 +30,16 @@ enum class PlaybackState
     Paused
 };
 
-class CVideoPlayer
+class CPlayerInstance
 {
 public:
-    CVideoPlayer() = default;
-    ~CVideoPlayer();
+    CPlayerInstance() = default;
+    ~CPlayerInstance();
 
-    CVideoPlayer(const CVideoPlayer&) = delete;
-    CVideoPlayer(CVideoPlayer&&) = delete;
-    CVideoPlayer& operator=(const CVideoPlayer&) = delete;
-    CVideoPlayer& operator=(CVideoPlayer&&) = delete;
+    CPlayerInstance(const CPlayerInstance&) = delete;
+    CPlayerInstance(CPlayerInstance&&) = delete;
+    CPlayerInstance& operator=(const CPlayerInstance&) = delete;
+    CPlayerInstance& operator=(CPlayerInstance&&) = delete;
 
 public:
     HRESULT Initialize(HWND parentWnd);
@@ -68,7 +67,7 @@ private:
     CCommandQueue<PlayerCommand> m_commandQueue;
     std::atomic<PlaybackState> m_playbackState{ PlaybackState::Stopped };
 
-    CPlayerWindow m_playerWindow;
+    HWND m_hwnd{ nullptr };
     CD3D12Renderer m_renderer;
     RECT m_windowPos{};
 };

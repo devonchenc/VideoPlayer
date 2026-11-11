@@ -5,7 +5,7 @@
 #include <mutex>
 #include <unordered_map>
 #include <Windows.h>
-#include "VideoPlayer.h"
+#include "PlayerInstance.h"
 
 class CPlayerManager
 {
@@ -21,7 +21,7 @@ public:
         if (!parentWnd || !IsWindow(parentWnd) || !playerInstance)
             return E_INVALIDARG;
 
-        std::shared_ptr<CVideoPlayer> player = std::make_shared<CVideoPlayer>();
+        std::shared_ptr<CPlayerInstance> player = std::make_shared<CPlayerInstance>();
         HRESULT hr = player->Initialize(parentWnd);
         if (FAILED(hr))
             return hr;
@@ -40,7 +40,7 @@ public:
 
     HRESULT ReleasePlayer(long playerInstance)
     {
-        std::shared_ptr<CVideoPlayer> player;
+        std::shared_ptr<CPlayerInstance> player;
 
         {
             std::lock_guard<std::mutex> lock(m_mutex);
@@ -58,7 +58,7 @@ public:
         return S_OK;
     }
 
-    std::shared_ptr<CVideoPlayer> GetPlayer(long playerInstance)
+    std::shared_ptr<CPlayerInstance> GetPlayer(long playerInstance)
     {
         std::lock_guard<std::mutex> lock(m_mutex);
 
@@ -72,7 +72,7 @@ public:
 
     HRESULT SetPlayerWindowPos(long playerInstance, RECT newWindowPos)
     {
-        std::shared_ptr<CVideoPlayer> player = GetPlayer(playerInstance);
+        std::shared_ptr<CPlayerInstance> player = GetPlayer(playerInstance);
         if (!player)
             return HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
 
@@ -83,6 +83,6 @@ private:
     CPlayerManager() = default;
 
     std::mutex m_mutex;
-    std::unordered_map<long, std::shared_ptr<CVideoPlayer>> m_players;
+    std::unordered_map<long, std::shared_ptr<CPlayerInstance>> m_players;
     std::atomic<long> m_nextPlayerId{ 1 };
 };

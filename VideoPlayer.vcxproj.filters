@@ -45,16 +45,13 @@
     <ClInclude Include="PlayerWindowProc.h">
       <Filter>Player</Filter>
     </ClInclude>
-    <ClInclude Include="PlayerWindow.h">
-      <Filter>Player</Filter>
-    </ClInclude>
     <ClInclude Include="PlayerGlobalContext.h">
       <Filter>Player</Filter>
     </ClInclude>
     <ClInclude Include="Interface.h">
       <Filter>Player</Filter>
     </ClInclude>
-    <ClInclude Include="VideoPlayer.h">
+    <ClInclude Include="PlayerInstance.h">
       <Filter>Player</Filter>
     </ClInclude>
     <ClInclude Include="D3D12Renderer.h">
@@ -95,10 +92,7 @@
     <ClCompile Include="Interface.cpp">
       <Filter>Player</Filter>
     </ClCompile>
-    <ClCompile Include="PlayerWindow.cpp">
-      <Filter>Player</Filter>
-    </ClCompile>
-    <ClCompile Include="VideoPlayer.cpp">
+    <ClCompile Include="PlayerInstance.cpp">
       <Filter>Player</Filter>
     </ClCompile>
     <ClCompile Include="D3D12Renderer.cpp">
