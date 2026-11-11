@@ -63,7 +63,6 @@ int CVideoPlayerView::OnCreate(LPCREATESTRUCT lpCreateStruct)
 		return -1;
 
 	HRESULT hr = CreatePlayerInstance(GetSafeHwnd(), NULL, &m_playerInstance);
-
 	if (FAILED(hr))
 	{
 		AfxMessageBox(_T("Failed to create player instance."));
@@ -80,13 +79,13 @@ void CVideoPlayerView::OnSize(UINT nType, int cx, int cy)
 	if (m_playerInstance == 0)
 		return;
 
-	RECT newWindowPos;
+	RECT newWindowPos{};
 	newWindowPos.left = 0;
 	newWindowPos.top = 0;
 	newWindowPos.right = cx;
 	newWindowPos.bottom = cy;
-	HRESULT hr = SetPlayerWindowPos(m_playerInstance, newWindowPos);
 
+	HRESULT hr = SetPlayerWindowPos(m_playerInstance, newWindowPos);
 	if (FAILED(hr))
 	{
 		AfxMessageBox(_T("Failed to set player window position."));

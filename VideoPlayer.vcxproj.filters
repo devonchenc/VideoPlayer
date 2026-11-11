@@ -13,6 +13,9 @@
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
+    <Filter Include="Player">
+      <UniqueIdentifier>{1f9fdcb9-14fb-4ee7-b82c-8ea926c90621}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="VideoPlayerApp.h">
@@ -39,8 +42,26 @@
     <ClInclude Include="Resource.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="PlayerWindowProc.h">
+      <Filter>Player</Filter>
+    </ClInclude>
+    <ClInclude Include="PlayerWindow.h">
+      <Filter>Player</Filter>
+    </ClInclude>
+    <ClInclude Include="PlayerGlobalContext.h">
+      <Filter>Player</Filter>
+    </ClInclude>
     <ClInclude Include="Interface.h">
-      <Filter>Header Files</Filter>
+      <Filter>Player</Filter>
+    </ClInclude>
+    <ClInclude Include="VideoPlayer.h">
+      <Filter>Player</Filter>
+    </ClInclude>
+    <ClInclude Include="D3D12Renderer.h">
+      <Filter>Player</Filter>
+    </ClInclude>
+    <ClInclude Include="PlayerManager.h">
+      <Filter>Player</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
@@ -59,8 +80,23 @@
     <ClCompile Include="VideoPlayerView.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="PlayerGlobalContext.cpp">
+      <Filter>Player</Filter>
+    </ClCompile>
+    <ClCompile Include="PlayerWindowProc.cpp">
+      <Filter>Player</Filter>
+    </ClCompile>
     <ClCompile Include="Interface.cpp">
-      <Filter>Source Files</Filter>
+      <Filter>Player</Filter>
+    </ClCompile>
+    <ClCompile Include="PlayerWindow.cpp">
+      <Filter>Player</Filter>
+    </ClCompile>
+    <ClCompile Include="VideoPlayer.cpp">
+      <Filter>Player</Filter>
+    </ClCompile>
+    <ClCompile Include="D3D12Renderer.cpp">
+      <Filter>Player</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
