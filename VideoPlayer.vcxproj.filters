@@ -63,6 +63,12 @@
     <ClInclude Include="PlayerManager.h">
       <Filter>Player</Filter>
     </ClInclude>
+    <ClInclude Include="BlockingQueue.h">
+      <Filter>Player</Filter>
+    </ClInclude>
+    <ClInclude Include="CommandQueue.h">
+      <Filter>Player</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="VideoPlayerApp.cpp">

@@ -186,7 +186,9 @@
     </ResourceCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClInclude Include="BlockingQueue.h" />
     <ClInclude Include="ChildFrm.h" />
+    <ClInclude Include="CommandQueue.h" />
     <ClInclude Include="D3D12Renderer.h" />
     <ClInclude Include="framework.h" />
     <ClInclude Include="Interface.h" />
