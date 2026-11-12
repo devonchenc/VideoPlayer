@@ -76,8 +76,8 @@
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <LinkIncremental>true</LinkIncremental>
-    <LibraryPath>C:\FFmpeg\ffmpeg-n8.1-latest-win64-gpl-shared-8.1\lib;$(LibraryPath)</LibraryPath>
-    <IncludePath>C:\FFmpeg\ffmpeg-n8.1-latest-win64-gpl-shared-8.1\include;$(IncludePath)</IncludePath>
+    <LibraryPath>D:\FFmpeg\ffmpeg-n8.1-latest-win64-gpl-shared-8.1\lib;$(LibraryPath)</LibraryPath>
+    <IncludePath>D:\FFmpeg\ffmpeg-n8.1-latest-win64-gpl-shared-8.1\include;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <LinkIncremental>true</LinkIncremental>
@@ -88,8 +88,8 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <LinkIncremental>false</LinkIncremental>
-    <IncludePath>C:\FFmpeg\ffmpeg-n8.1-latest-win64-gpl-shared-8.1\include;$(IncludePath)</IncludePath>
-    <LibraryPath>C:\FFmpeg\ffmpeg-n8.1-latest-win64-gpl-shared-8.1\lib;$(LibraryPath)</LibraryPath>
+    <IncludePath>D:\FFmpeg\ffmpeg-n8.1-latest-win64-gpl-shared-8.1\include;$(IncludePath)</IncludePath>
+    <LibraryPath>D:\FFmpeg\ffmpeg-n8.1-latest-win64-gpl-shared-8.1\lib;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
