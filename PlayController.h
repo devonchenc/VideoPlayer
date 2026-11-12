@@ -8,36 +8,14 @@
 #include <string>
 #include <thread>
 #include <vector>
-
-extern "C"
-{
-#include <libavcodec/avcodec.h>
-#include <libavformat/avformat.h>
-#include <libavutil/channel_layout.h>
-#include <libavutil/error.h>
-#include <libavutil/imgutils.h>
-#include <libswresample/swresample.h>
-#include <libswscale/swscale.h>
-}
-
+#define NOMINMAX
+#include <Windows.h>
+#include "Utility.h"
 #include "BlockingQueue.h"
 
 struct PlayerConfig
 {
     std::chrono::milliseconds videoBufferDurationMs{ 1000 };
-};
-
-enum class StreamType
-{
-    Live,
-    Recorded
-};
-
-enum class PlaybackState
-{
-    Playing,
-    Paused,
-    Stopped
 };
 
 class CPlayController
@@ -60,59 +38,11 @@ public:
     void Resume();
     bool IsPaused() const { return m_playbackState == PlaybackState::Paused; }
 
+    bool TryGetVideoFrame(VideoFrame& frame);
+    HANDLE GetVideoFrameEvent() const { return m_videoFrameEvent; }
+    double GetMasterClock() const;
+
 private:
-    struct FormatDeleter
-    {
-        void operator()(AVFormatContext* p) const
-        {
-            if (p)
-                avformat_close_input(&p);
-        }
-    };
-    struct CodecDeleter
-    {
-        void operator()(AVCodecContext* p) const
-        {
-            if (p)
-                avcodec_free_context(&p);
-        }
-    };
-    struct PacketDeleter
-    {
-        void operator()(AVPacket* p) const
-        {
-            if (p)
-                av_packet_free(&p);
-        }
-    };
-    struct FrameDeleter
-    {
-        void operator()(AVFrame* p) const
-        {
-            if (p)
-                av_frame_free(&p);
-        }
-    };
-    struct SwsDeleter
-    {
-        void operator()(SwsContext* p) const
-        {
-            if (p)
-                sws_freeContext(p);
-        }
-    };
-
-    using FormatPtr = std::unique_ptr<AVFormatContext, FormatDeleter>;
-    using CodecPtr = std::unique_ptr<AVCodecContext, CodecDeleter>;
-    using PacketPtr = std::unique_ptr<AVPacket, PacketDeleter>;
-    using FramePtr = std::unique_ptr<AVFrame, FrameDeleter>;
-    using SwsPtr = std::unique_ptr<SwsContext, SwsDeleter>;
-
-    struct VideoFrame
-    {
-        FramePtr frame;
-        double pts{ 0.0 }; // normalized seconds
-    };
 
     bool InitializeFFmpeg(const std::string& url);
     bool InitializeVideoDecoder();
@@ -129,12 +59,9 @@ private:
     bool FlushVideoDecoder(std::stop_token stopToken);
 
     void NotifyDataReady();
-    void ScheduleVideoFrame();
     void RenderVideoFrame(AVFrame* frame);
 
     double NormalizeTimestamp(std::int64_t timestamp, AVRational timeBase) const;
-    double GetMasterClock() const;
-    int GetNextVideoWaitTimeoutMs() const;
 
     static int InterruptCallback(void* opaque);
     static void LogFFmpegError(const char* operation, int error);
@@ -154,7 +81,7 @@ private:
 
     AVFrame* m_yuvFrame{ nullptr };
 
-    std::atomic<bool> m_dataReadyEventPending{ false };
+    HANDLE m_videoFrameEvent{ nullptr };
 
     // Queues
     CBlockingQueue<PacketPtr> m_videoPacketQueue{ 128 };
@@ -172,7 +99,6 @@ private:
     bool m_videoNextPtsValid{ false };
 
     // Main thread only: pending video frame and video clock
-    std::optional<VideoFrame> m_pendingVideoFrame;
     bool m_videoClockStarted{ false };
     double m_videoClockBasePts{ 0.0 };
     std::chrono::steady_clock::time_point m_videoClockBaseTime{};
@@ -180,9 +106,7 @@ private:
     // FPS stats
     std::chrono::steady_clock::time_point m_lastStatsTime{};
     std::atomic<uint64_t> m_decodedFrameCount{ 0 };
-    std::atomic<uint64_t> m_renderedFrameCount{ 0 };
     std::uint64_t m_lastDecodedFrameCount{ 0 };
-    std::uint64_t m_lastRenderedFrameCount{ 0 };
 
     PlayerConfig m_config;
 

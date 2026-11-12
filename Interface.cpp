@@ -53,3 +53,8 @@ HRESULT PlayPause(long playerInstance)
 {
     return CPlayerManager::Instance().PlayPause(playerInstance);
 }
+
+HRESULT PlayResume(long playerInstance)
+{
+    return CPlayerManager::Instance().PlayResume(playerInstance);
+}

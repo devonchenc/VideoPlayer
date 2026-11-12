@@ -42,7 +42,7 @@ HRESULT CD3D12Renderer::Resize(UINT width, UINT height)
         renderTarget.Reset();
 
     // Resize swap chain buffers
-    hr = m_swapChain->ResizeBuffers(FRAME_COUNT, width, height, DXGI_FORMAT_R8G8B8A8_UNORM, 0);
+    hr = m_swapChain->ResizeBuffers(FRAME_COUNT, width, height, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT);
     if (FAILED(hr))
         return hr;
 
@@ -65,6 +65,12 @@ void CD3D12Renderer::Shutdown()
 
     for (auto& target : m_renderTargets)
         target.Reset();
+
+    if (m_frameLatencyWaitableObject)
+    {
+        CloseHandle(m_frameLatencyWaitableObject);
+        m_frameLatencyWaitableObject = nullptr;
+    }
 
     m_rtvHeap.Reset();
     m_swapChain.Reset();
@@ -142,7 +148,7 @@ HRESULT CD3D12Renderer::CreateSwapChain(HWND hwnd)
     desc.Scaling = DXGI_SCALING_STRETCH;
     desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
     desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
-    desc.Flags = 0;
+    desc.Flags = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
 
     ComPtr<IDXGISwapChain1> swapChain;
     HRESULT hr = m_factory->CreateSwapChainForHwnd(m_commandQueue.Get(), hwnd, &desc, nullptr, nullptr, &swapChain);
@@ -152,6 +158,20 @@ HRESULT CD3D12Renderer::CreateSwapChain(HWND hwnd)
     hr = swapChain.As(&m_swapChain);
     if (FAILED(hr))
         return hr;
+
+    // Configure maximum frame latency
+    hr = m_swapChain->SetMaximumFrameLatency(1);
+    if (FAILED(hr))
+    {
+        return hr;
+    }
+
+    // Retrieve the frame latency waitable object
+    m_frameLatencyWaitableObject = m_swapChain->GetFrameLatencyWaitableObject();
+    if (!m_frameLatencyWaitableObject)
+    {
+        return HRESULT_FROM_WIN32(GetLastError());
+    }
 
     // Disable Alt+Enter fullscreen switching
     return m_factory->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER);

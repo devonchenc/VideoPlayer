@@ -106,6 +106,15 @@ public:
         return player->PlayPause();
     }
 
+    HRESULT PlayResume(long playerInstance)
+    {
+        std::shared_ptr<CPlayerInstance> player = GetPlayer(playerInstance);
+        if (!player)
+            return HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+
+        return player->PlayResume();
+    }
+
 private:
     CPlayerManager() = default;
     ~CPlayerManager() = default;

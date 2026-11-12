@@ -43,13 +43,12 @@ bool CPlayController::Initialize()
 
     m_stopping = false;
     m_videoDone = false;
-    m_dataReadyEventPending = false;
+    m_videoFrameEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
 
     m_videoNextPts = 0.0;
     m_videoNextPtsValid = false;
 
     m_videoClockStarted = false;
-    m_pendingVideoFrame.reset();
 
     return true;
 }
@@ -226,8 +225,6 @@ void CPlayController::Stop()
         m_demuxThread.join();
     if (m_videoDecodeThread.joinable())
         m_videoDecodeThread.join();
-
-    m_pendingVideoFrame.reset();
 
     if (m_yuvFrame)
         av_frame_free(&m_yuvFrame);
@@ -410,10 +407,8 @@ void CPlayController::NotifyDataReady()
     if (m_stopping)
         return;
 
-    if (m_dataReadyEventPending.exchange(true))
-        return;
-
-    // TODO: notify
+    // Notify Render Thread
+    SetEvent(m_videoFrameEvent);
 }
 
 double CPlayController::GetMasterClock() const
@@ -426,60 +421,26 @@ double CPlayController::GetMasterClock() const
     return m_videoClockBasePts + elapsed;
 }
 
-void CPlayController::ScheduleVideoFrame()
+bool CPlayController::TryGetVideoFrame(VideoFrame& frame)
 {
-    while (true)
+    bool result = m_videoFrameQueue.TryPop(frame);
+
+    if (result)
     {
-        if (!m_pendingVideoFrame)
-        {
-            VideoFrame next;
-            if (!m_videoFrameQueue.TryPop(next))
-                return;
-
-            m_pendingVideoFrame = std::move(next);
-        }
-
+        // Start video clock
         if (!m_videoClockStarted)
         {
-            m_videoClockBasePts = m_pendingVideoFrame->pts;
+            m_videoClockBasePts = frame.pts;
             m_videoClockBaseTime = std::chrono::steady_clock::now();
             m_videoClockStarted = true;
         }
-
-        const double difference = m_pendingVideoFrame->pts - GetMasterClock();
-
-        if (difference > EARLY_FRAME_THRESHOLD_SECONDS)
-        {
-            return;
-        }
-        else if (difference < -LATE_FRAME_THRESHOLD_SECONDS)
-        {
-            m_pendingVideoFrame.reset();
-            continue;
-        }
-
-        RenderVideoFrame(m_pendingVideoFrame->frame.get());
-
-        ++m_renderedFrameCount;
-
-        m_pendingVideoFrame.reset();
     }
-}
+    else
+    {
+        ResetEvent(m_videoFrameEvent);
+    }
 
-int CPlayController::GetNextVideoWaitTimeoutMs() const
-{
-    if (!m_pendingVideoFrame)
-        return -1;
-
-    const double difference = m_pendingVideoFrame->pts - GetMasterClock();
-
-    if (difference <= 0.0)
-        return 0;
-
-    constexpr double maximumWaitSeconds = 1.0;
-    const double waitSeconds = std::min(difference, maximumWaitSeconds);
-
-    return static_cast<int>(std::ceil(waitSeconds * 1000.0));
+    return result;
 }
 
 void CPlayController::RenderVideoFrame(AVFrame* frame)
@@ -575,29 +536,6 @@ bool CPlayController::PlayRecorded(const std::string& url)
 
 void CPlayController::Play()
 {
-    if (!m_formatContext || !m_videoCodecContext)
-    {
-        std::cerr << "Call Open() successfully before Play()" << std::endl;
-        return;
-    }
-
-    if (!IsPaused())
-    {
-        ScheduleVideoFrame();
-
-        PrintStatistics();
-    }
-
-    const bool videoFinished = m_videoDone && m_videoFrameQueue.Empty() && !m_pendingVideoFrame;
-
-    if (!IsPaused() && videoFinished)
-        return;
-
-    int timeoutMs = 20;
-    if (!IsPaused())
-    {
-        timeoutMs = GetNextVideoWaitTimeoutMs();
-    }
 }
 
 size_t CPlayController::GetMaxVideoFrameQueueSize() const
@@ -629,14 +567,11 @@ void CPlayController::PrintStatistics()
         return;
 
     const double decodedFps = (m_decodedFrameCount - m_lastDecodedFrameCount) / elapsed;
-    const double renderedFps = (m_renderedFrameCount - m_lastRenderedFrameCount) / elapsed;
 
     std::cout << "\n========== Player Statistics ==========\n"
         << "Decoded FPS:  " << decodedFps << '\n'
-        << "Rendered FPS: " << renderedFps << '\n'
         << "Video Queue Size:   " << m_videoFrameQueue.Size() << std::endl;
 
     m_lastDecodedFrameCount = m_decodedFrameCount;
-    m_lastRenderedFrameCount = m_renderedFrameCount;
     m_lastStatsTime = now;
 }

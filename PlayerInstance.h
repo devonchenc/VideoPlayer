@@ -4,6 +4,7 @@
 #include <memory>
 #include <mutex>
 #include <thread>
+#include "Utility.h"
 #include "CommandQueue.h"
 #include "D3D12Renderer.h"
 #include "PlayController.h"
@@ -14,7 +15,8 @@ enum class PlayerCommandType
     Play,
     Pause,
     Resume,
-    Stop
+    Stop,
+    Clear
 };
 
 struct PlayerCommand
@@ -23,6 +25,16 @@ struct PlayerCommand
 
     UINT width{ 0 };
     UINT height{ 0 };
+};
+
+enum class RenderWaitResult
+{
+    StopRequested,
+    CommandReceived,
+    VideoFrameAvailable,
+    TimerExpired,
+    FrameLatencyAvailable,
+    Failed
 };
 
 class CPlayerInstance
@@ -43,6 +55,7 @@ public:
     HRESULT PlayLive(long cameraNumber, long playSpeed);
     HRESULT PlayStop();
     HRESULT PlayPause();
+    HRESULT PlayResume();
 
     void Shutdown();
 
@@ -50,21 +63,18 @@ public:
     void StopRendering();
 
 private:
-    HRESULT Play();
-    HRESULT Pause();
-    HRESULT Resume();
-    HRESULT Stop();
-
     void RenderThread(std::stop_token stopToken);
     void ProcessPendingCommands(std::stop_token stopToken);
-    void ProcessVideoFrames();
-    void ProcessCommand(const PlayerCommand& command);
+    void ProcessVideoFrames(std::stop_token stopToken);
+    DWORD CalculateNextWakeUpTimeout() const;
+    RenderWaitResult WaitForRenderEvents(DWORD timeoutMs, bool waitForFrameLatency);
 
 private:
     std::mutex m_mutex;
     std::jthread m_renderThread;
 
-    CCommandQueue<PlayerCommand> m_commandQueue;
+    std::mutex m_commandMutex;
+    std::queue<PlayerCommand> m_commandQueue;
     std::atomic<PlaybackState> m_playbackState{ PlaybackState::Stopped };
 
     HWND m_hwnd{ nullptr };
@@ -72,4 +82,12 @@ private:
     bool m_initialized{ false };
     std::unique_ptr<CD3D12Renderer> m_renderer;
     std::unique_ptr<CPlayController> m_controller;
+
+    std::optional<VideoFrame> m_pendingVideoFrame;
+    std::atomic<uint64_t> m_renderedFrameCount{ 0 };
+    std::uint64_t m_lastRenderedFrameCount{ 0 };
+
+    HANDLE m_commandEvent{ nullptr };
+    HANDLE m_stopEvent{ nullptr };
+    HANDLE m_renderTimer{ nullptr };
 };

@@ -8,6 +8,7 @@
 #include <wrl/client.h>
 #include <dxgi1_6.h>
 #include <d3d12.h>
+#include "Utility.h"
 
 #pragma comment(lib, "d3d12.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -32,6 +33,8 @@ public:
     HRESULT Resize(UINT width, UINT height);
     void Shutdown();
     void Render();
+    HRESULT RenderFrame(AVFrame* frame) { return S_OK; }
+    HANDLE GetFrameLatencyWaitableObject() const { return m_frameLatencyWaitableObject; }
 
 private:
     HRESULT InitializeSwapChain(UINT width, UINT height);
@@ -59,6 +62,7 @@ private:
 
     UINT64 m_fenceValue{ 0 };
     HANDLE m_fenceEvent{ nullptr };
+    HANDLE m_frameLatencyWaitableObject{ nullptr };
 
     UINT m_width{ 0 };
     UINT m_height{ 0 };

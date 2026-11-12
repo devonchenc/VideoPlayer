@@ -25,6 +25,7 @@ CVideoPlayerView::CVideoPlayerView() noexcept
 
 CVideoPlayerView::~CVideoPlayerView()
 {
+	ReleasePlayerInstance(m_playerInstance);
 }
 
 BOOL CVideoPlayerView::PreCreateWindow(CREATESTRUCT& cs)
