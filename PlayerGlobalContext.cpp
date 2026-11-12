@@ -29,15 +29,15 @@ HRESULT CPlayerGlobalContext::Initialize()
     if (m_initialized)
         return S_OK;
 
-    HRESULT hr = InitializeFFmpeg();
-    if (FAILED(hr))
-        return hr;
-
-    hr = RegisterWindowClass();
+    HRESULT hr = RegisterWindowClass();
     if (FAILED(hr))
         return hr;
 
     hr = InitializeD3D12();
+    if (FAILED(hr))
+        return hr;
+
+    hr = InitializeFFmpeg();
     if (FAILED(hr))
         return hr;
 
@@ -56,16 +56,6 @@ bool CPlayerGlobalContext::IsInitialized() const
 {
     std::lock_guard lock(m_mutex);
     return m_initialized;
-}
-
-HRESULT CPlayerGlobalContext::InitializeFFmpeg()
-{
-    const int result = avformat_network_init();
-
-    if (result < 0)
-        return E_FAIL;
-
-    return S_OK;
 }
 
 HRESULT CPlayerGlobalContext::RegisterWindowClass()
@@ -122,8 +112,8 @@ HRESULT CPlayerGlobalContext::InitializeD3D12()
         DXGI_ADAPTER_DESC1 desc{};
         adapter->GetDesc1(&desc);
 
-        if (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)
-            continue;
+        //if (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)
+        //    continue;
 
         hr = D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, __uuidof(ID3D12Device), nullptr);
         if (FAILED(hr))
@@ -151,4 +141,14 @@ HRESULT CPlayerGlobalContext::InitializeD3D12()
         return hr;
 
     return hr;
+}
+
+HRESULT CPlayerGlobalContext::InitializeFFmpeg()
+{
+    const int result = avformat_network_init();
+
+    if (result < 0)
+        return E_FAIL;
+
+    return S_OK;
 }

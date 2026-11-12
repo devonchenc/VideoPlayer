@@ -33,3 +33,23 @@ HRESULT SetPlayerWindowPos(long playerInstance, RECT newWindowPos)
 {
     return CPlayerManager::Instance().SetPlayerWindowPos(playerInstance, newWindowPos);
 }
+
+HRESULT GetPlayerWindowPos(long playerInstance, RECT* windowPos)
+{
+    return CPlayerManager::Instance().GetPlayerWindowPos(playerInstance, windowPos);
+}
+
+HRESULT PlayLive(long playerInstance, long cameraNumber, long playSpeed)
+{
+    return CPlayerManager::Instance().PlayLive(playerInstance, cameraNumber, playSpeed);
+}
+
+HRESULT PlayStop(long playerInstance)
+{
+    return CPlayerManager::Instance().PlayStop(playerInstance);
+}
+
+HRESULT PlayPause(long playerInstance)
+{
+    return CPlayerManager::Instance().PlayPause(playerInstance);
+}

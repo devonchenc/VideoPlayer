@@ -78,33 +78,24 @@ The global architecture is independent of individual playback sessions.
 
 ```mermaid
 flowchart TB
-    APP["Host Application"]
-    API["Player DLL API"]
-    PM["PlayerManager"]
+    APP["Video Clients"]
 
     subgraph GLOBAL["Global Infrastructure"]
+        PM["PlayerManager"]
         PGC["PlayerGlobalContext"]
         DXGI["DXGI Factory"]
-        ADAPTER["Selected GPU Adapter"]
         DEVICE["D3D12 Device"]
-        QUEUE["D3D12 Graphics Command Queue"]
+        QUEUE["D3D12 Command Queue"]
 
         PGC --> DXGI
-        PGC --> ADAPTER
         PGC --> DEVICE
         PGC --> QUEUE
     end
 
-    APP --> API
-    API --> PM
-    PM --> PGC
+    APP -->|"DLL API"| PM
     PM --> P1["PlayerInstance 1"]
     PM --> P2["PlayerInstance 2"]
     PM --> PN["PlayerInstance N"]
-
-    PGC -. "Shared Graphics Resources" .-> P1
-    PGC -. "Shared Graphics Resources" .-> P2
-    PGC -. "Shared Graphics Resources" .-> PN
 ```
 
 ## 2.3 PlayerManager
@@ -403,21 +394,17 @@ The shared PlayerGlobalContext remains alive because other player instances may 
 ```mermaid
 flowchart TB
     PM["PlayerManager"]
-    PGC["PlayerGlobalContext"]
 
     PM --> P1["PlayerInstance 1"]
     PM --> P2["PlayerInstance 2"]
 
-    P1 --> PW1["PlayerWindow"]
+    P1 --> PW1["Player Window"]
     P1 --> R1["D3D12Renderer"]
     P1 --> PC1["PlayController"]
 
-    P2 --> PW2["PlayerWindow"]
+    P2 --> PW2["Player Window"]
     P2 --> R2["D3D12Renderer"]
     P2 --> PC2["PlayController"]
-
-    PGC -.-> R1
-    PGC -.-> R2
 ```
 
 The diagram illustrates that PlayerWindow, D3D12Renderer, and PlayController are independent within each player instance.

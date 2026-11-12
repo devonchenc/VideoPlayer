@@ -58,18 +58,6 @@ public:
         return S_OK;
     }
 
-    std::shared_ptr<CPlayerInstance> GetPlayer(long playerInstance)
-    {
-        std::lock_guard<std::mutex> lock(m_mutex);
-
-        auto it = m_players.find(playerInstance);
-
-        if (it == m_players.end())
-            return nullptr;
-
-        return it->second;
-    }
-
     HRESULT SetPlayerWindowPos(long playerInstance, RECT newWindowPos)
     {
         std::shared_ptr<CPlayerInstance> player = GetPlayer(playerInstance);
@@ -79,9 +67,66 @@ public:
         return player->SetWindowPos(newWindowPos);
     }
 
+    HRESULT GetPlayerWindowPos(long playerInstance, RECT* windowPos)
+    {
+        if (!windowPos)
+            return E_INVALIDARG;
+
+        std::shared_ptr<CPlayerInstance> player = GetPlayer(playerInstance);
+        if (!player)
+            return HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+
+        return player->GetWindowPos(windowPos);
+    }
+
+    HRESULT PlayLive(long playerInstance, long cameraNumber, long playSpeed)
+    {
+        std::shared_ptr<CPlayerInstance> player = GetPlayer(playerInstance);
+        if (!player)
+            return HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+
+        return player->PlayLive(cameraNumber, playSpeed);
+    }
+
+    HRESULT PlayStop(long playerInstance)
+    {
+        std::shared_ptr<CPlayerInstance> player = GetPlayer(playerInstance);
+        if (!player)
+            return HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+
+        return player->PlayStop();
+    }
+
+    HRESULT PlayPause(long playerInstance)
+    {
+        std::shared_ptr<CPlayerInstance> player = GetPlayer(playerInstance);
+        if (!player)
+            return HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+
+        return player->PlayPause();
+    }
+
 private:
     CPlayerManager() = default;
+    ~CPlayerManager() = default;
 
+    CPlayerManager(const CPlayerManager&) = delete;
+    CPlayerManager(CPlayerManager&&) = delete;
+    CPlayerManager& operator=(const CPlayerManager&) = delete;
+    CPlayerManager& operator=(CPlayerManager&&) = delete;
+
+    std::shared_ptr<CPlayerInstance> GetPlayer(long playerInstance)
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+
+        auto it = m_players.find(playerInstance);
+        if (it == m_players.end())
+            return nullptr;
+
+        return it->second;
+    }
+
+private:
     std::mutex m_mutex;
     std::unordered_map<long, std::shared_ptr<CPlayerInstance>> m_players;
     std::atomic<long> m_nextPlayerId{ 1 };

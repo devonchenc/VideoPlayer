@@ -1,10 +1,12 @@
 #pragma once
 
 #include <condition_variable>
+#include <memory>
 #include <mutex>
 #include <thread>
 #include "CommandQueue.h"
 #include "D3D12Renderer.h"
+#include "PlayController.h"
 
 enum class PlayerCommandType
 {
@@ -23,17 +25,10 @@ struct PlayerCommand
     UINT height{ 0 };
 };
 
-enum class PlaybackState
-{
-    Stopped,
-    Playing,
-    Paused
-};
-
 class CPlayerInstance
 {
 public:
-    CPlayerInstance() = default;
+    CPlayerInstance();
     ~CPlayerInstance();
 
     CPlayerInstance(const CPlayerInstance&) = delete;
@@ -44,10 +39,10 @@ public:
 public:
     HRESULT Initialize(HWND parentWnd);
     HRESULT SetWindowPos(RECT newWindowPos);
-    HRESULT Play();
-    HRESULT Pause();
-    HRESULT Resume();
-    HRESULT Stop();
+    HRESULT GetWindowPos(RECT* windowPos);
+    HRESULT PlayLive(long cameraNumber, long playSpeed);
+    HRESULT PlayStop();
+    HRESULT PlayPause();
 
     void Shutdown();
 
@@ -55,19 +50,26 @@ public:
     void StopRendering();
 
 private:
-    void RenderThread(std::stop_token stopToken);
+    HRESULT Play();
+    HRESULT Pause();
+    HRESULT Resume();
+    HRESULT Stop();
 
+    void RenderThread(std::stop_token stopToken);
+    void ProcessPendingCommands(std::stop_token stopToken);
+    void ProcessVideoFrames();
     void ProcessCommand(const PlayerCommand& command);
 
 private:
     std::mutex m_mutex;
     std::jthread m_renderThread;
-    std::condition_variable_any m_cv;
 
     CCommandQueue<PlayerCommand> m_commandQueue;
     std::atomic<PlaybackState> m_playbackState{ PlaybackState::Stopped };
 
     HWND m_hwnd{ nullptr };
-    CD3D12Renderer m_renderer;
     RECT m_windowPos{};
+    bool m_initialized{ false };
+    std::unique_ptr<CD3D12Renderer> m_renderer;
+    std::unique_ptr<CPlayController> m_controller;
 };

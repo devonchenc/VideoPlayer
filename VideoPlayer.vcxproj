@@ -76,20 +76,20 @@
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <LinkIncremental>true</LinkIncremental>
-    <LibraryPath>D:\FFmpeg\ffmpeg-n8.1-latest-win64-gpl-shared-8.1\lib;$(LibraryPath)</LibraryPath>
-    <IncludePath>D:\FFmpeg\ffmpeg-n8.1-latest-win64-gpl-shared-8.1\include;$(IncludePath)</IncludePath>
+    <LibraryPath>C:\FFmpeg\ffmpeg-n8.1-latest-win64-gpl-shared-8.1\lib;$(LibraryPath)</LibraryPath>
+    <IncludePath>C:\FFmpeg\ffmpeg-n8.1-latest-win64-gpl-shared-8.1\include;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <LinkIncremental>true</LinkIncremental>
-    <IncludePath>D:\FFmpeg\ffmpeg-n8.1-latest-win64-gpl-shared-8.1\include;$(IncludePath)</IncludePath>
+    <IncludePath>C:\FFmpeg\ffmpeg-n8.1-latest-win64-gpl-shared-8.1\include;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <LinkIncremental>false</LinkIncremental>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <LinkIncremental>false</LinkIncremental>
-    <IncludePath>D:\FFmpeg\ffmpeg-n8.1-latest-win64-gpl-shared-8.1\include;$(IncludePath)</IncludePath>
-    <LibraryPath>D:\FFmpeg\ffmpeg-n8.1-latest-win64-gpl-shared-8.1\lib;$(LibraryPath)</LibraryPath>
+    <IncludePath>C:\FFmpeg\ffmpeg-n8.1-latest-win64-gpl-shared-8.1\include;$(IncludePath)</IncludePath>
+    <LibraryPath>C:\FFmpeg\ffmpeg-n8.1-latest-win64-gpl-shared-8.1\lib;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
@@ -100,7 +100,7 @@
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
-      <AdditionalDependencies>avcodec.lib;avformat.lib;avutil.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>avcodec.lib;avformat.lib;avutil.lib;swscale.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Midl>
       <MkTypLibCompatible>false</MkTypLibCompatible>
@@ -172,7 +172,7 @@
       <SubSystem>Windows</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>avcodec.lib;avformat.lib;avutil.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>avcodec.lib;avformat.lib;avutil.lib;swscale.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Midl>
       <MkTypLibCompatible>false</MkTypLibCompatible>
@@ -193,6 +193,7 @@
     <ClInclude Include="framework.h" />
     <ClInclude Include="Interface.h" />
     <ClInclude Include="MainFrm.h" />
+    <ClInclude Include="PlayController.h" />
     <ClInclude Include="PlayerGlobalContext.h" />
     <ClInclude Include="PlayerManager.h" />
     <ClInclude Include="PlayerWindowProc.h" />
@@ -208,6 +209,7 @@
     <ClCompile Include="D3D12Renderer.cpp" />
     <ClCompile Include="Interface.cpp" />
     <ClCompile Include="MainFrm.cpp" />
+    <ClCompile Include="PlayController.cpp" />
     <ClCompile Include="PlayerGlobalContext.cpp" />
     <ClCompile Include="PlayerWindowProc.cpp" />
     <ClCompile Include="PlayerInstance.cpp" />

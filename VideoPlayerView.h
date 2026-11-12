@@ -28,6 +28,9 @@ protected:
 protected:
 	afx_msg int OnCreate(LPCREATESTRUCT lpCreateStruct);
 	afx_msg void OnSize(UINT nType, int cx, int cy);
+	afx_msg void OnButtonPlay();
+	afx_msg void OnButtonPause();
+	afx_msg void OnButtonStop();
 	DECLARE_MESSAGE_MAP()
 
 private:

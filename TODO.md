@@ -41,3 +41,9 @@ void PlayerWindow::RenderThread(std::stop_token stopToken)
 
 
 对于目前第一版不处理音频的设计，可以先使用基于 std::chrono::steady_clock 的 Video Clock 来调度视频帧，后续加入音频时再切换到 Audio Master Clock。
+
+# 2. Question
+
+## 2.1 Playback commands such as Play, Pause, Resume, and Stop are handled by PlayController and do not need to be routed through the rendering command queue?
+
+## 2.2 When play is paused, should D3D12 keep rendering?

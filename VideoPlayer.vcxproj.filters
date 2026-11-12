@@ -66,6 +66,9 @@
     <ClInclude Include="CommandQueue.h">
       <Filter>Player</Filter>
     </ClInclude>
+    <ClInclude Include="PlayController.h">
+      <Filter>Player</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="VideoPlayerApp.cpp">
@@ -96,6 +99,9 @@
       <Filter>Player</Filter>
     </ClCompile>
     <ClCompile Include="D3D12Renderer.cpp">
+      <Filter>Player</Filter>
+    </ClCompile>
+    <ClCompile Include="PlayController.cpp">
       <Filter>Player</Filter>
     </ClCompile>
   </ItemGroup>

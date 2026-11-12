@@ -14,6 +14,9 @@ IMPLEMENT_DYNCREATE(CVideoPlayerView, CView)
 BEGIN_MESSAGE_MAP(CVideoPlayerView, CView)
 	ON_WM_CREATE()
 	ON_WM_SIZE()
+	ON_COMMAND(ID_BUTTON_PLAY, &CVideoPlayerView::OnButtonPlay)
+	ON_COMMAND(ID_BUTTON_PAUSE, &CVideoPlayerView::OnButtonPause)
+	ON_COMMAND(ID_BUTTON_STOP, &CVideoPlayerView::OnButtonStop)
 END_MESSAGE_MAP()
 
 CVideoPlayerView::CVideoPlayerView() noexcept
@@ -90,4 +93,31 @@ void CVideoPlayerView::OnSize(UINT nType, int cx, int cy)
 	{
 		AfxMessageBox(_T("Failed to set player window position."));
     }
+}
+
+void CVideoPlayerView::OnButtonPlay()
+{
+	HRESULT hr = PlayLive(m_playerInstance, 1, 1);
+	if (FAILED(hr))
+	{
+		AfxMessageBox(_T("Failed to play."));
+	}
+}
+
+void CVideoPlayerView::OnButtonPause()
+{
+	HRESULT hr = PlayPause(m_playerInstance);
+	if (FAILED(hr))
+	{
+		AfxMessageBox(_T("Failed to pause."));
+	}
+}
+
+void CVideoPlayerView::OnButtonStop()
+{
+	HRESULT hr = PlayStop(m_playerInstance);
+	if (FAILED(hr))
+	{
+		AfxMessageBox(_T("Failed to stop."));
+	}
 }

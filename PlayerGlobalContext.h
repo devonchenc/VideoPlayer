@@ -26,23 +26,22 @@ public:
     ComPtr<IDXGIFactory6> GetFactory() const { return m_factory; }
     ComPtr<ID3D12Device> GetDevice() const { return m_device; }
     ComPtr<ID3D12CommandQueue> GetCommandQueue() const { return m_commandQueue; }
-    IDXGIFactory6* GetDXGIFactory() const;
 
 private:
     CPlayerGlobalContext();
     ~CPlayerGlobalContext();
 
 private:
-    HRESULT InitializeFFmpeg();
     HRESULT RegisterWindowClass();
     HRESULT InitializeD3D12();
+    HRESULT InitializeFFmpeg();
 
 private:
     mutable std::mutex m_mutex;
     bool m_initialized{ false };
 
     ComPtr<IDXGIFactory6> m_factory;
+    ComPtr<IDXGIAdapter1> m_adapter;
     ComPtr<ID3D12Device> m_device;
     ComPtr<ID3D12CommandQueue> m_commandQueue;
-    ComPtr<IDXGIAdapter1> m_adapter;
 };
