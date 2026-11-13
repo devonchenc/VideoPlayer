@@ -47,6 +47,10 @@ HRESULT CD3D12Renderer::Initialize(HWND hwnd)
     if (FAILED(hr))
         return hr;
 
+    hr = CreateFence();
+    if (FAILED(hr))
+        return hr;
+
     hr = CreateRootSignature();
     if (FAILED(hr))
         return hr;
@@ -95,7 +99,8 @@ void CD3D12Renderer::Shutdown()
     if (m_commandQueue && m_fence && m_fenceEvent)
         WaitForGpu();
 
-    m_commandList.Reset();
+    m_renderCommandList.Reset();
+    m_uploadCommandList.Reset();
 
     for (auto& frame : m_frames)
         frame.commandAllocator.Reset();
@@ -132,12 +137,12 @@ HRESULT CD3D12Renderer::CreateCommandObjects()
             return hr;
     }
 
-    hr = m_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, m_frames[0].commandAllocator.Get(), nullptr, IID_PPV_ARGS(&m_commandList));
+    hr = m_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, m_frames[0].commandAllocator.Get(), nullptr, IID_PPV_ARGS(&m_renderCommandList));
     if (FAILED(hr))
         return hr;
 
     // Command lists are initially open
-    hr = m_commandList->Close();
+    hr = m_renderCommandList->Close();
     if (FAILED(hr))
         return hr;
 
@@ -153,7 +158,12 @@ HRESULT CD3D12Renderer::CreateCommandObjects()
     if (FAILED(hr))
         return hr;
 
-    hr = m_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_fence));
+    return S_OK;
+}
+
+HRESULT CD3D12Renderer::CreateFence()
+{
+    HRESULT hr = m_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_fence));
     if (FAILED(hr))
         return hr;
 
@@ -263,12 +273,28 @@ HRESULT CD3D12Renderer::CreateRenderTargetViews()
     return S_OK;
 }
 
+HRESULT CD3D12Renderer::WaitForFence(UINT64 fenceValue)
+{
+    if (m_fence->GetCompletedValue() >= fenceValue)
+        return S_OK;
+
+    HRESULT hr = m_fence->SetEventOnCompletion(fenceValue, m_fenceEvent);
+    if (FAILED(hr))
+        return hr;
+
+    DWORD result = WaitForSingleObject(m_fenceEvent, INFINITE);
+    if (result != WAIT_OBJECT_0)
+        return HRESULT_FROM_WIN32(result == WAIT_FAILED ? GetLastError() : ERROR_GEN_FAILURE);
+
+    return S_OK;
+}
+
 HRESULT CD3D12Renderer::WaitForGpu()
 {
     if (!m_commandQueue || !m_fence)
         return E_FAIL;
 
-    const UINT64 fenceValue = ++m_fenceValue;
+    const UINT64 fenceValue = ++m_nextFenceValue;
 
     HRESULT hr = m_commandQueue->Signal(m_fence.Get(), fenceValue);
     if (FAILED(hr))
@@ -319,10 +345,14 @@ HRESULT CD3D12Renderer::UploadVideoFrame(AVFrame* frame)
         m_height = height;
     }
 
+    HRESULT hr;
     // 2. Wait until previous GPU usage has completed
-    HRESULT hr = WaitForGpu();
-    if (FAILED(hr))
-        return hr;
+    if (m_uploadFenceValue != 0)
+    {
+        hr = WaitForFence(m_uploadFenceValue);
+        if (FAILED(hr))
+            return hr;
+    }
 
     // 3. Map upload buffers.
     BYTE* yMapped = nullptr;
@@ -364,7 +394,124 @@ HRESULT CD3D12Renderer::UploadVideoFrame(AVFrame* frame)
     return CopyVideoPlanesToGpu();
 }
 
-void CD3D12Renderer::Render()
+HRESULT CD3D12Renderer::Render()
+{
+    if (!m_swapChain || !m_pipelineState)
+        return E_UNEXPECTED;
+
+    if (!m_yTexture || !m_uTexture || !m_vTexture)
+        return S_FALSE;
+
+    // 1. Get current back buffer.
+    const UINT backBufferIndex = m_swapChain->GetCurrentBackBufferIndex();
+    FrameContext& frame = m_frames[backBufferIndex];
+
+    HRESULT hr;
+    // 2. Wait for previous rendering to complete
+    if (frame.fenceValue != 0)
+    {
+        hr = WaitForFence(frame.fenceValue);
+        if (FAILED(hr))
+            return hr;
+    }
+
+    // 3. Reset command allocator and command list.
+    hr = frame.commandAllocator->Reset();
+    if (FAILED(hr))
+        return hr;
+
+    hr = m_renderCommandList->Reset(frame.commandAllocator.Get(), m_pipelineState.Get());
+    if (FAILED(hr))
+        return hr;
+
+    ComPtr<ID3D12Resource>& backBuffer = m_renderTargets[backBufferIndex];
+
+    // 4. Transition PRESENT -> RENDER_TARGET
+    D3D12_RESOURCE_BARRIER barrier{};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier.Transition.pResource = backBuffer.Get();
+    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+
+    m_renderCommandList->ResourceBarrier(1, &barrier);
+
+    // 5. Set render target
+    D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
+
+    rtvHandle.ptr += static_cast<SIZE_T>(backBufferIndex) * m_rtvDescriptorSize;
+
+    m_renderCommandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
+
+    // 6. Set viewport and scissor rect
+    D3D12_VIEWPORT viewport{};
+    viewport.TopLeftX = 0.0f;
+    viewport.TopLeftY = 0.0f;
+    viewport.Width = static_cast<float>(m_width);
+    viewport.Height = static_cast<float>(m_height);
+    viewport.MinDepth = 0.0f;
+    viewport.MaxDepth = 1.0f;
+
+    D3D12_RECT scissorRect{};
+    scissorRect.left = 0;
+    scissorRect.top = 0;
+    scissorRect.right = static_cast<LONG>(m_width);
+    scissorRect.bottom = static_cast<LONG>(m_height);
+
+    m_renderCommandList->RSSetViewports(1, &viewport);
+
+    m_renderCommandList->RSSetScissorRects(1, &scissorRect);
+
+    // 7. Clear render target
+    const float clearColor[] = { 0.0f, 0.0f, 0.0f, 1.0f };
+
+    m_renderCommandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
+
+    // 8. Bind pipeline and root signature.
+    m_renderCommandList->SetGraphicsRootSignature(m_rootSignature.Get());
+
+    m_renderCommandList->SetPipelineState(m_pipelineState.Get());
+
+    // 9. Bind video SRV descriptor heap.
+    ID3D12DescriptorHeap* descriptorHeaps[] = { m_videoSrvHeap.Get() };
+
+    m_renderCommandList->SetDescriptorHeaps(1, descriptorHeaps);
+
+    // 10. Bind SRV descriptor table.
+    m_renderCommandList->SetGraphicsRootDescriptorTable(0, m_videoSrvHeap->GetGPUDescriptorHandleForHeapStart());
+
+    // 11. Draw fullscreen triangle
+    m_renderCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+    m_renderCommandList->DrawInstanced(3, 1, 0, 0);
+
+    // 12. Transition RENDER_TARGET -> PRESENT
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
+
+    m_renderCommandList->ResourceBarrier(1, &barrier);
+
+    // 13. Close command list.
+    hr = m_renderCommandList->Close();
+
+    if (FAILED(hr))
+        return hr;
+
+    // 14. Execute command list
+    ID3D12CommandList* commandLists[] = { m_renderCommandList.Get() };
+
+    m_commandQueue->ExecuteCommandLists(1, commandLists);
+
+    // 15. Present
+    hr = m_swapChain->Present(1, 0);
+
+    // 16. Signal GPU fence
+    frame.fenceValue = SignalGpu();
+
+    return hr;
+}
+
+void CD3D12Renderer::Clear()
 {
     if (!m_swapChain)
         return;
@@ -373,7 +520,7 @@ void CD3D12Renderer::Render()
     FrameContext& frame = m_frames[backBufferIndex];
 
     // Wait until previous GPU work is completed
-    HRESULT hr = WaitForFrame(frame);
+    HRESULT hr = WaitForFence(frame.fenceValue);
     if (FAILED(hr))
     {
         OutputDebugStringW(L"Wait for frame failed\n");
@@ -389,7 +536,7 @@ void CD3D12Renderer::Render()
     }
 
     // Reset command list
-    hr = m_commandList->Reset(frame.commandAllocator.Get(), nullptr);
+    hr = m_renderCommandList->Reset(frame.commandAllocator.Get(), nullptr);
     if (FAILED(hr))
         return;
 
@@ -404,20 +551,20 @@ void CD3D12Renderer::Render()
     barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
     barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
 
-    m_commandList->ResourceBarrier(1, &barrier);
+    m_renderCommandList->ResourceBarrier(1, &barrier);
 
     // Clear render target to black
     constexpr float clearColor[] = { 0.0f, 0.0f, 0.0f, 1.0f };
-    m_commandList->ClearRenderTargetView(m_rtvHandles[backBufferIndex], clearColor, 0, nullptr);
+    m_renderCommandList->ClearRenderTargetView(m_rtvHandles[backBufferIndex], clearColor, 0, nullptr);
 
     // Transition: RENDER_TARGET -> PRESENT
     barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
     barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
 
-    m_commandList->ResourceBarrier(1, &barrier);
+    m_renderCommandList->ResourceBarrier(1, &barrier);
 
     // Close command list
-    hr = m_commandList->Close();
+    hr = m_renderCommandList->Close();
     if (FAILED(hr))
     {
         OutputDebugStringW(L"CommandList Close failed\n");
@@ -425,17 +572,11 @@ void CD3D12Renderer::Render()
     }
 
     // Execute command list
-    ID3D12CommandList* commandLists[] = { m_commandList.Get() };
+    ID3D12CommandList* commandLists[] = { m_renderCommandList.Get() };
     m_commandQueue->ExecuteCommandLists(1, commandLists);
 
     // Signal GPU completion for this frame
-    const UINT64 fenceValue = ++m_fenceValue;
-
-    hr = m_commandQueue->Signal(m_fence.Get(), fenceValue);
-    if (FAILED(hr))
-        return;
-
-    frame.fenceValue = fenceValue;
+    frame.fenceValue = SignalGpu();
 
     // Present
     hr = m_swapChain->Present(1, 0);
@@ -444,31 +585,6 @@ void CD3D12Renderer::Render()
         OutputDebugStringW(L"Present failed\n");
         return;
     }
-}
-
-HRESULT CD3D12Renderer::WaitForFrame(FrameContext& frame)
-{
-    if (frame.fenceValue == 0)
-        return S_OK;
-
-    const UINT64 completedValue = m_fence->GetCompletedValue();
-    if (completedValue == UINT64_MAX)
-        return DXGI_ERROR_DEVICE_REMOVED;
-
-    if (completedValue >= frame.fenceValue)
-        return S_OK;
-
-    HRESULT hr = m_fence->SetEventOnCompletion(frame.fenceValue, m_fenceEvent);
-    if (FAILED(hr))
-        return hr;
-
-    const DWORD result = WaitForSingleObject(m_fenceEvent, INFINITE);
-    if (result != WAIT_OBJECT_0)
-    {
-        return HRESULT_FROM_WIN32(result == WAIT_FAILED ? GetLastError() : ERROR_GEN_FAILURE);
-    }
-
-    return S_OK;
 }
 
 HRESULT CD3D12Renderer::CreateVideoTextures(UINT width, UINT height)
@@ -752,22 +868,6 @@ HRESULT CD3D12Renderer::CreatePipelineState()
     psoDesc.PS.pShaderBytecode = m_pixelShader->GetBufferPointer();
     psoDesc.PS.BytecodeLength = m_pixelShader->GetBufferSize();
 
-    //D3D12_DEPTH_STENCIL_DESC& ds = psoDesc.DepthStencilState;
-    //ds.DepthEnable = FALSE;
-    //ds.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
-    //ds.DepthFunc = D3D12_COMPARISON_FUNC_ALWAYS;
-    //ds.StencilEnable = FALSE;
-    //ds.StencilReadMask = D3D12_DEFAULT_STENCIL_READ_MASK;
-    //ds.StencilWriteMask = D3D12_DEFAULT_STENCIL_WRITE_MASK;
-    //ds.FrontFace.StencilFailOp = D3D12_STENCIL_OP_KEEP;
-    //ds.FrontFace.StencilDepthFailOp = D3D12_STENCIL_OP_KEEP;
-    //ds.FrontFace.StencilPassOp = D3D12_STENCIL_OP_KEEP;
-    //ds.FrontFace.StencilFunc = D3D12_COMPARISON_FUNC_ALWAYS;
-    //ds.BackFace.StencilFailOp = D3D12_STENCIL_OP_KEEP;
-    //ds.BackFace.StencilDepthFailOp = D3D12_STENCIL_OP_KEEP;
-    //ds.BackFace.StencilPassOp = D3D12_STENCIL_OP_KEEP;
-    //ds.BackFace.StencilFunc = D3D12_COMPARISON_FUNC_ALWAYS;
-
     // 3. Blend State
     D3D12_BLEND_DESC& blendDesc = psoDesc.BlendState;
     blendDesc.AlphaToCoverageEnable = FALSE;
@@ -860,4 +960,18 @@ HRESULT CD3D12Renderer::CompileShader(const std::wstring& filename, const char* 
     }
 
     return S_OK;
+}
+
+UINT64 CD3D12Renderer::SignalGpu()
+{
+    const UINT64 fenceValue = m_nextFenceValue++;
+
+    HRESULT hr = m_commandQueue->Signal(m_fence.Get(), fenceValue);
+    if (FAILED(hr))
+    {
+        // Handle error appropriately.
+        return 0;
+    }
+
+    return fenceValue;
 }

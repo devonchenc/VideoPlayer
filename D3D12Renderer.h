@@ -41,12 +41,14 @@ public:
     HRESULT Resize(UINT width, UINT height);
     void Shutdown();
     HRESULT UploadVideoFrame(AVFrame* frame);
-    void Render();
+    HRESULT Render();
+    void Clear();
     HANDLE GetFrameLatencyWaitableObject() const { return m_frameLatencyWaitableObject; }
 
 private:
     HRESULT InitializeSwapChain(UINT width, UINT height);
     HRESULT CreateCommandObjects();
+    HRESULT CreateFence();
     HRESULT CreateSwapChain(HWND hwnd);
     HRESULT CreateRenderTargetViews();
     HRESULT CreateRootSignature();
@@ -59,8 +61,9 @@ private:
     HRESULT CreateUploadBuffer(UINT64 size, ComPtr<ID3D12Resource>& buffer);
     PlaneUploadInfo GetPlaneUploadInfo(UINT width, UINT height);
     HRESULT CopyVideoPlanesToGpu();
+    HRESULT WaitForFence(UINT64 fenceValue);
     HRESULT WaitForGpu();
-    HRESULT WaitForFrame(FrameContext& frame);
+    UINT64 SignalGpu();
 
 private:
     HWND m_hwnd;
@@ -74,17 +77,17 @@ private:
     std::array<D3D12_CPU_DESCRIPTOR_HANDLE, FRAME_COUNT> m_rtvHandles;
     std::array<ComPtr<ID3D12Resource>, FRAME_COUNT> m_renderTargets;
     std::array<FrameContext, FRAME_COUNT> m_frames;
-    ComPtr<ID3D12GraphicsCommandList> m_commandList;
+    ComPtr<ID3D12GraphicsCommandList> m_renderCommandList;
     ComPtr<ID3D12Fence> m_fence;
 
-    UINT m_rtvDescriptorSize{ 0 };
-
-    UINT64 m_fenceValue{ 0 };
+    UINT64 m_nextFenceValue{ 0 };
+    UINT64 m_uploadFenceValue{ 0 };
     HANDLE m_fenceEvent{ nullptr };
     HANDLE m_frameLatencyWaitableObject{ nullptr };
 
     UINT m_width{ 0 };
     UINT m_height{ 0 };
+    UINT m_rtvDescriptorSize{ 0 };
 
     ComPtr<ID3D12Resource> m_yTexture;
     ComPtr<ID3D12Resource> m_uTexture;
