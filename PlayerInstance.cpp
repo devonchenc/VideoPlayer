@@ -247,8 +247,6 @@ void CPlayerInstance::ProcessVideoFrames(std::stop_token stopToken)
     if (m_playbackState != PlaybackState::Playing)
         return;
 
-    static int count = 0;
-
     // Process frames until we find one that is ready to render.
     while (m_playbackState == PlaybackState::Playing)
     {

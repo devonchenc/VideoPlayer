@@ -973,15 +973,11 @@ HRESULT CD3D12Renderer::CompileShader(const std::wstring& filename, const char* 
 #endif
 
     ComPtr<ID3DBlob> errorBlob;
-
     HRESULT hr = D3DCompileFromFile(filename.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, entryPoint, target, compileFlags, 0, &shaderBlob, &errorBlob);
-
     if (FAILED(hr))
     {
         if (errorBlob)
-        {
             OutputDebugStringA(static_cast<const char*>(errorBlob->GetBufferPointer()));
-        }
 
         return hr;
     }
