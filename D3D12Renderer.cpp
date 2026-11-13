@@ -476,25 +476,23 @@ HRESULT CD3D12Renderer::Render()
     scissorRect.bottom = static_cast<LONG>(m_height);
 
     m_renderCommandList->RSSetViewports(1, &viewport);
-
     m_renderCommandList->RSSetScissorRects(1, &scissorRect);
 
     // 7. Clear render target
     const float clearColor[] = { 0.0f, 0.0f, 0.0f, 1.0f };
-
     m_renderCommandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
 
-    // 8. Bind pipeline and root signature.
+    // 8. Bind pipeline and root signature
     m_renderCommandList->SetGraphicsRootSignature(m_rootSignature.Get());
 
     m_renderCommandList->SetPipelineState(m_pipelineState.Get());
 
-    // 9. Bind video SRV descriptor heap.
+    // 9. Bind video SRV descriptor heap
     ID3D12DescriptorHeap* descriptorHeaps[] = { m_videoSrvHeap.Get() };
 
     m_renderCommandList->SetDescriptorHeaps(1, descriptorHeaps);
 
-    // 10. Bind SRV descriptor table.
+    // 10. Bind SRV descriptor table
     m_renderCommandList->SetGraphicsRootDescriptorTable(0, m_videoSrvHeap->GetGPUDescriptorHandleForHeapStart());
 
     // 11. Draw fullscreen triangle
@@ -508,9 +506,8 @@ HRESULT CD3D12Renderer::Render()
 
     m_renderCommandList->ResourceBarrier(1, &barrier);
 
-    // 13. Close command list.
+    // 13. Close command list
     hr = m_renderCommandList->Close();
-
     if (FAILED(hr))
         return hr;
 
