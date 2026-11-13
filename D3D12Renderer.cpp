@@ -79,7 +79,7 @@ HRESULT CD3D12Renderer::Resize(UINT width, UINT height)
         return hr;
 
     // Release old back buffers
-    for (auto& renderTarget : m_renderTargets)
+    for (ComPtr<ID3D12Resource>& renderTarget : m_renderTargets)
         renderTarget.Reset();
 
     // Resize swap chain buffers
@@ -90,8 +90,13 @@ HRESULT CD3D12Renderer::Resize(UINT width, UINT height)
     m_width = width;
     m_height = height;
 
+    // Recreate render target views.
+    hr = CreateRenderTargetViews();
+    if (FAILED(hr))
+        return hr;
+
     // Recreate render target views
-    return CreateRenderTargetViews();
+    return S_OK;
 }
 
 void CD3D12Renderer::Shutdown()
@@ -102,10 +107,10 @@ void CD3D12Renderer::Shutdown()
     m_renderCommandList.Reset();
     m_uploadCommandList.Reset();
 
-    for (auto& frame : m_frames)
+    for (FrameContext& frame : m_frames)
         frame.commandAllocator.Reset();
 
-    for (auto& target : m_renderTargets)
+    for (ComPtr<ID3D12Resource>& target : m_renderTargets)
         target.Reset();
 
     if (m_frameLatencyWaitableObject)
@@ -320,27 +325,26 @@ HRESULT CD3D12Renderer::UploadVideoFrame(AVFrame* frame)
     if (!frame)
         return E_INVALIDARG;
 
-    if (frame->format != AV_PIX_FMT_YUV420P)
+    if (frame->format != AV_PIX_FMT_YUV420P && frame->format != AV_PIX_FMT_YUVJ420P)
         return E_NOTIMPL;
 
-    const UINT width = frame->width;
-    const UINT height = frame->height;
+    const UINT videoWidth = frame->width;
+    const UINT videoHeight = frame->height;
 
-    if (width == 0 || height == 0)
+    if (videoWidth == 0 || videoHeight == 0)
         return E_INVALIDARG;
 
-    const UINT chromaWidth = (width + 1) / 2;
-    const UINT chromaHeight = (height + 1) / 2;
+    const UINT chromaWidth = (videoWidth + 1) / 2;
+    const UINT chromaHeight = (videoHeight + 1) / 2;
 
     // 1. Recreate resources if video format or size changes
-    if (m_width != width || m_height != height)
+    if (m_videoWidth != videoWidth || m_videoHeight != videoHeight)
     {
         // Wait for previous GPU usage before releasing old textures
         const UINT backBufferIndex = m_swapChain->GetCurrentBackBufferIndex();
         FrameContext& frame = m_frames[backBufferIndex];
 
         HRESULT hr;
-        // 2. Wait for previous rendering to complete
         if (frame.fenceValue != 0)
         {
             hr = WaitForFence(frame.fenceValue);
@@ -348,14 +352,14 @@ HRESULT CD3D12Renderer::UploadVideoFrame(AVFrame* frame)
                 return hr;
         }
 
-        hr = CreateVideoTextures(width, height);
+        hr = CreateVideoTextures(videoWidth, videoHeight);
         if (FAILED(hr))
             return hr;
 
         CreateVideoSrvs();
 
-        m_width = width;
-        m_height = height;
+        m_videoWidth = videoWidth;
+        m_videoHeight = videoHeight;
     }
 
     HRESULT hr;
@@ -394,7 +398,7 @@ HRESULT CD3D12Renderer::UploadVideoFrame(AVFrame* frame)
     }
 
     // 4. Copy AVFrame data to upload buffers
-    CopyPlane(yMapped, m_yRowPitch, frame->data[0], frame->linesize[0], width, height);
+    CopyPlane(yMapped, m_yRowPitch, frame->data[0], frame->linesize[0], videoWidth, videoHeight);
     CopyPlane(uMapped, m_uRowPitch, frame->data[1], frame->linesize[1], chromaWidth, chromaHeight);
     CopyPlane(vMapped, m_vRowPitch, frame->data[2], frame->linesize[2], chromaWidth, chromaHeight);
 

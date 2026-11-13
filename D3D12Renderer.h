@@ -89,6 +89,8 @@ private:
     UINT m_height{ 0 };
     UINT m_rtvDescriptorSize{ 0 };
 
+    UINT m_videoWidth{ 0 };
+    UINT m_videoHeight{ 0 };
     ComPtr<ID3D12Resource> m_yTexture;
     ComPtr<ID3D12Resource> m_uTexture;
     ComPtr<ID3D12Resource> m_vTexture;
