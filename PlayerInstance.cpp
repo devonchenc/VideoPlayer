@@ -247,10 +247,10 @@ void CPlayerInstance::ProcessVideoFrames(std::stop_token stopToken)
     if (m_playbackState != PlaybackState::Playing)
         return;
 
-    // Process frames until we find one that is ready to render.
+    // Process frames until we find one that is ready to render
     while (m_playbackState == PlaybackState::Playing)
     {
-        // Get the next frame if there is no pending frame.
+        // Get the next frame if there is no pending frame
         if (!m_pendingVideoFrame)
         {
             VideoFrame frame;
@@ -269,7 +269,7 @@ void CPlayerInstance::ProcessVideoFrames(std::stop_token stopToken)
             return;
         }
         // Frame is too late
-        if (difference < -LATE_FRAME_THRESHOLD_SECONDS)
+        else if (difference < -LATE_FRAME_THRESHOLD_SECONDS)
         {
             m_pendingVideoFrame.reset();
             continue;
@@ -279,7 +279,7 @@ void CPlayerInstance::ProcessVideoFrames(std::stop_token stopToken)
         const HRESULT hr = m_renderer->UploadVideoFrame(m_pendingVideoFrame->frame.get());
         if (FAILED(hr))
         {
-            // Handle rendering errors.
+            // Handle rendering errors
             //HandleRenderError(hr);
 
             m_pendingVideoFrame.reset();
@@ -289,7 +289,7 @@ void CPlayerInstance::ProcessVideoFrames(std::stop_token stopToken)
         // 4. Render
         m_renderer->Render();
 
-        // Frame has been submitted for rendering.
+        // Frame has been submitted for rendering
         m_pendingVideoFrame.reset();
 
         // Render at most one frame per invocation
@@ -315,7 +315,7 @@ DWORD CPlayerInstance::CalculateNextWakeUpTimeout() const
 
 RenderWaitResult CPlayerInstance::WaitForRenderEvents(DWORD timeoutMs, bool waitForFrameLatency)
 {
-    // Configure the render timer.
+    // Configure the render timer
     if (timeoutMs == INFINITE || timeoutMs == 0)
     {
         CancelWaitableTimer(m_renderTimer);

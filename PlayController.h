@@ -48,7 +48,6 @@ private:
     bool InitializeVideoDecoder();
     bool InitializeSDL();
 
-    void Play();
     void StartThreads();
 
     void DemuxThread(std::stop_token stopToken);
@@ -57,9 +56,7 @@ private:
     bool DecodeVideoPacket(AVPacket* packet, std::stop_token stopToken);
     bool ReceiveVideoFrames(std::stop_token stopToken);
     bool FlushVideoDecoder(std::stop_token stopToken);
-
     void NotifyDataReady();
-    void RenderVideoFrame(AVFrame* frame);
 
     double NormalizeTimestamp(std::int64_t timestamp, AVRational timeBase) const;
 
@@ -72,14 +69,11 @@ private:
     // FFmpeg objects
     FormatPtr m_formatContext;
     CodecPtr m_videoCodecContext;
-    SwsPtr m_swsContext;
 
     AVStream* m_videoAVStream{ nullptr };
 
     int m_videoStreamIndex{ -1 };
     double m_timestampOrigin{ 0.0 };
-
-    AVFrame* m_yuvFrame{ nullptr };
 
     HANDLE m_videoFrameEvent{ nullptr };
 

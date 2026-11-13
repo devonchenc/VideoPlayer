@@ -6,11 +6,6 @@ extern "C"
 {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
-#include <libavutil/channel_layout.h>
-#include <libavutil/error.h>
-#include <libavutil/imgutils.h>
-#include <libswresample/swresample.h>
-#include <libswscale/swscale.h>
 }
 
 enum class StreamType
@@ -58,20 +53,11 @@ struct FrameDeleter
             av_frame_free(&p);
     }
 };
-struct SwsDeleter
-{
-    void operator()(SwsContext* p) const
-    {
-        if (p)
-            sws_freeContext(p);
-    }
-};
 
 using FormatPtr = std::unique_ptr<AVFormatContext, FormatDeleter>;
 using CodecPtr = std::unique_ptr<AVCodecContext, CodecDeleter>;
 using PacketPtr = std::unique_ptr<AVPacket, PacketDeleter>;
 using FramePtr = std::unique_ptr<AVFrame, FrameDeleter>;
-using SwsPtr = std::unique_ptr<SwsContext, SwsDeleter>;
 
 struct VideoFrame
 {

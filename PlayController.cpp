@@ -167,29 +167,6 @@ bool CPlayController::InitializeVideoDecoder()
     return true;
 }
 
-bool CPlayController::InitializeSDL()
-{
-    const int width = std::max(1, m_videoCodecContext->width);
-    const int height = std::max(1, m_videoCodecContext->height);
-
-    m_yuvFrame = av_frame_alloc();
-    if (!m_yuvFrame)
-        return false;
-
-    m_yuvFrame->format = AV_PIX_FMT_YUV420P;
-    m_yuvFrame->width = width;
-    m_yuvFrame->height = height;
-
-    const int result = av_frame_get_buffer(m_yuvFrame, 32);
-    if (result < 0)
-    {
-        LogFFmpegError("av_frame_get_buffer", result);
-        return false;
-    }
-
-    return true;
-}
-
 double CPlayController::NormalizeTimestamp(std::int64_t timestamp, AVRational timeBase) const
 {
     if (timestamp == AV_NOPTS_VALUE)
@@ -225,11 +202,6 @@ void CPlayController::Stop()
         m_demuxThread.join();
     if (m_videoDecodeThread.joinable())
         m_videoDecodeThread.join();
-
-    if (m_yuvFrame)
-        av_frame_free(&m_yuvFrame);
-
-    m_swsContext.reset();
 
     m_videoCodecContext.reset();
     m_formatContext.reset();
@@ -443,67 +415,12 @@ bool CPlayController::TryGetVideoFrame(VideoFrame& frame)
     return result;
 }
 
-void CPlayController::RenderVideoFrame(AVFrame* frame)
-{
-    if (!frame || !m_yuvFrame)
-        return;
-
-    const int width = frame->width;
-    const int height = frame->height;
-
-    SwsContext* cachedContext = sws_getCachedContext(m_swsContext.release(), width, height, static_cast<AVPixelFormat>(frame->format),
-        width, height, AV_PIX_FMT_YUV420P, SWS_BILINEAR, nullptr, nullptr, nullptr);
-    if (!cachedContext)
-    {
-        std::cerr << "sws_getCachedContext failed" << std::endl;
-        return;
-    }
-
-    m_swsContext.reset(cachedContext);
-
-    if (m_yuvFrame->width != width || m_yuvFrame->height != height)
-    {
-        av_frame_unref(m_yuvFrame);
-        m_yuvFrame->format = AV_PIX_FMT_YUV420P;
-        m_yuvFrame->width = width;
-        m_yuvFrame->height = height;
-
-        const int allocResult = av_frame_get_buffer(m_yuvFrame, 32);
-        if (allocResult < 0)
-        {
-            LogFFmpegError("av_frame_get_buffer(resize)", allocResult);
-            return;
-        }
-    }
-
-    if (av_frame_make_writable(m_yuvFrame) < 0)
-        return;
-
-    std::uint8_t* destinationData[4] =
-    {
-        m_yuvFrame->data[0],
-        m_yuvFrame->data[1],
-        m_yuvFrame->data[2],
-        nullptr
-    };
-
-    int destinationLinesize[4] =
-    {
-        m_yuvFrame->linesize[0],
-        m_yuvFrame->linesize[1],
-        m_yuvFrame->linesize[2],
-        0
-    };
-
-    sws_scale(m_swsContext.get(), frame->data, frame->linesize, 0, height, destinationData, destinationLinesize);
-}
-
 bool CPlayController::PlayLive(const std::string& url)
 {
     if (!Initialize())
         return false;
 
-    if (!InitializeFFmpeg(url) || !InitializeSDL())
+    if (!InitializeFFmpeg(url))
     {
         Stop();
         return false;
@@ -521,7 +438,7 @@ bool CPlayController::PlayRecorded(const std::string& url)
     if (!Initialize())
         return false;
 
-    if (!InitializeFFmpeg(url) || !InitializeSDL())
+    if (!InitializeFFmpeg(url))
     {
         Stop();
         return false;
@@ -532,10 +449,6 @@ bool CPlayController::PlayRecorded(const std::string& url)
     StartThreads();
 
     return true;
-}
-
-void CPlayController::Play()
-{
 }
 
 size_t CPlayController::GetMaxVideoFrameQueueSize() const
