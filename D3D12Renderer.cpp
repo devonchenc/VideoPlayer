@@ -814,7 +814,7 @@ void CD3D12Renderer::CreateVideoSrvs()
 
 HRESULT CD3D12Renderer::CreateRootSignature()
 {
-    // 1. Define SRV Descriptor Range.
+    // 1. Define SRV Descriptor Range
     D3D12_DESCRIPTOR_RANGE srvRange{};
 
     srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
@@ -824,14 +824,14 @@ HRESULT CD3D12Renderer::CreateRootSignature()
     srvRange.OffsetInDescriptorsFromTableStart =
         D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-    // 2. Define Root Parameter.
+    // 2. Define Root Parameter
     D3D12_ROOT_PARAMETER rootParameter{};
     rootParameter.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     rootParameter.DescriptorTable.NumDescriptorRanges = 1;
     rootParameter.DescriptorTable.pDescriptorRanges = &srvRange;
     rootParameter.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
-    // 3. Define Static Sampler.
+    // 3. Define Static Sampler
     D3D12_STATIC_SAMPLER_DESC sampler{};
     sampler.Filter = D3D12_FILTER_MIN_MAG_LINEAR_MIP_POINT;
     sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
@@ -847,7 +847,7 @@ HRESULT CD3D12Renderer::CreateRootSignature()
     sampler.RegisterSpace = 0;
     sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
-    // 4. Define Root Signature.
+    // 4. Define Root Signature
     D3D12_ROOT_SIGNATURE_DESC rootSignatureDesc{};
 
     rootSignatureDesc.NumParameters = 1;
@@ -863,7 +863,6 @@ HRESULT CD3D12Renderer::CreateRootSignature()
     ComPtr<ID3DBlob> errorBlob;
 
     HRESULT hr = D3D12SerializeRootSignature(&rootSignatureDesc, D3D_ROOT_SIGNATURE_VERSION_1, &signatureBlob, &errorBlob);
-
     if (FAILED(hr))
     {
         if (errorBlob)
@@ -981,8 +980,7 @@ HRESULT CD3D12Renderer::CompileShader(const std::wstring& filename, const char* 
     {
         if (errorBlob)
         {
-            OutputDebugStringA(
-                static_cast<const char*>(errorBlob->GetBufferPointer()));
+            OutputDebugStringA(static_cast<const char*>(errorBlob->GetBufferPointer()));
         }
 
         return hr;
