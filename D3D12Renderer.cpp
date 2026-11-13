@@ -335,7 +335,20 @@ HRESULT CD3D12Renderer::UploadVideoFrame(AVFrame* frame)
     // 1. Recreate resources if video format or size changes
     if (m_width != width || m_height != height)
     {
-        HRESULT hr = CreateVideoTextures(width, height);
+        // Wait for previous GPU usage before releasing old textures
+        const UINT backBufferIndex = m_swapChain->GetCurrentBackBufferIndex();
+        FrameContext& frame = m_frames[backBufferIndex];
+
+        HRESULT hr;
+        // 2. Wait for previous rendering to complete
+        if (frame.fenceValue != 0)
+        {
+            hr = WaitForFence(frame.fenceValue);
+            if (FAILED(hr))
+                return hr;
+        }
+
+        hr = CreateVideoTextures(width, height);
         if (FAILED(hr))
             return hr;
 
@@ -612,9 +625,19 @@ HRESULT CD3D12Renderer::CreateVideoTextures(UINT width, UINT height)
     m_uRowPitch = m_uUploadInfo.footprint.Footprint.RowPitch;
     m_vRowPitch = m_vUploadInfo.footprint.Footprint.RowPitch;
 
-    CreateUploadBuffer(m_yUploadInfo.totalBytes, m_yUploadBuffer);
-    CreateUploadBuffer(m_uUploadInfo.totalBytes, m_uUploadBuffer);
-    CreateUploadBuffer(m_vUploadInfo.totalBytes, m_vUploadBuffer);
+    hr = CreateUploadBuffer(m_yUploadInfo.totalBytes, m_yUploadBuffer);
+    if (FAILED(hr))
+        return hr;
+
+    hr = CreateUploadBuffer(m_uUploadInfo.totalBytes, m_uUploadBuffer);
+    if (FAILED(hr))
+        return hr;
+
+    hr = CreateUploadBuffer(m_vUploadInfo.totalBytes, m_vUploadBuffer);
+    if (FAILED(hr))
+        return hr;
+
+    m_videoTexturesInShaderState = false;
 
     return S_OK;
 }
@@ -744,6 +767,11 @@ HRESULT CD3D12Renderer::CopyVideoPlanesToGpu()
     m_commandQueue->ExecuteCommandLists(1, lists);
 
     m_videoTexturesInShaderState = true;
+
+    // Signal GPU
+    m_uploadFenceValue = SignalGpu();
+    if (m_uploadFenceValue == 0)
+        return E_FAIL;
 
     return S_OK;
 }

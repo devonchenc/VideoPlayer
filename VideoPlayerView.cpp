@@ -39,8 +39,6 @@ void CVideoPlayerView::OnDraw(CDC* /*pDC*/)
 	ASSERT_VALID(pDoc);
 	if (!pDoc)
 		return;
-
-	// TODO: add draw code for native data here
 }
 
 #ifdef _DEBUG
