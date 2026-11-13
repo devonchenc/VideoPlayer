@@ -63,9 +63,6 @@
     <ClInclude Include="BlockingQueue.h">
       <Filter>Player</Filter>
     </ClInclude>
-    <ClInclude Include="CommandQueue.h">
-      <Filter>Player</Filter>
-    </ClInclude>
     <ClInclude Include="PlayController.h">
       <Filter>Player</Filter>
     </ClInclude>

@@ -3,9 +3,9 @@
 #include <condition_variable>
 #include <memory>
 #include <mutex>
+#include <queue>
 #include <thread>
 #include "Utility.h"
-#include "CommandQueue.h"
 #include "D3D12Renderer.h"
 #include "PlayController.h"
 

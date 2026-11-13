@@ -998,7 +998,7 @@ UINT64 CD3D12Renderer::SignalGpu()
     HRESULT hr = m_commandQueue->Signal(m_fence.Get(), fenceValue);
     if (FAILED(hr))
     {
-        // Handle error appropriately.
+        // Handle error appropriately
         return 0;
     }
 
