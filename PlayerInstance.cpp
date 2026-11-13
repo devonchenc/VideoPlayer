@@ -176,11 +176,6 @@ void CPlayerInstance::RenderThread(std::stop_token stopToken)
         if (stopToken.stop_requested())
             break;
 
-        if (m_playbackState == PlaybackState::Playing)
-        {
-            m_renderer->Render();
-        }
-
         // Calculate the next wake-up time
         const DWORD timeoutMs = CalculateNextWakeUpTimeout();
         // 5. Wait for DXGI when a frame is ready
@@ -283,7 +278,7 @@ void CPlayerInstance::ProcessVideoFrames(std::stop_token stopToken)
         }
 
         // Render the frame
-        const HRESULT hr = m_renderer->RenderFrame(m_pendingVideoFrame->frame.get());
+        const HRESULT hr = m_renderer->UploadVideoFrame(m_pendingVideoFrame->frame.get());
         if (FAILED(hr))
         {
             // Handle rendering errors.
@@ -292,6 +287,9 @@ void CPlayerInstance::ProcessVideoFrames(std::stop_token stopToken)
             m_pendingVideoFrame.reset();
             return;
         }
+
+        // 4. Render
+        m_renderer->Render();
 
         // Frame has been submitted for rendering.
         m_pendingVideoFrame.reset();

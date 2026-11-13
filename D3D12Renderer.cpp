@@ -1,6 +1,35 @@
 #include "D3D12Renderer.h"
 
+#include <D3DCompiler.h>
 #include "PlayerGlobalContext.h"
+
+#pragma comment(lib, "D3DCompiler.lib")
+
+namespace
+{
+    void CopyPlane(BYTE* dst, UINT dstRowPitch, const BYTE* src, int srcLinesize, UINT rowSize, UINT height)
+    {
+        for (UINT y = 0; y < height; ++y)
+        {
+            memcpy(dst + static_cast<size_t>(y) * dstRowPitch, src + static_cast<ptrdiff_t>(y) * srcLinesize, rowSize);
+        }
+    }
+
+    void CopyPlaneToTexture(ID3D12GraphicsCommandList* commandList, ID3D12Resource* uploadBuffer, ID3D12Resource* texture, const D3D12_PLACED_SUBRESOURCE_FOOTPRINT& footprint)
+    {
+        D3D12_TEXTURE_COPY_LOCATION src{};
+        src.pResource = uploadBuffer;
+        src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        src.PlacedFootprint = footprint;
+
+        D3D12_TEXTURE_COPY_LOCATION dst{};
+        dst.pResource = texture;
+        dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        dst.SubresourceIndex = 0;
+
+        commandList->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+    }
+}
 
 HRESULT CD3D12Renderer::Initialize(HWND hwnd)
 {
@@ -15,6 +44,14 @@ HRESULT CD3D12Renderer::Initialize(HWND hwnd)
     m_commandQueue = context.GetCommandQueue();
 
     HRESULT hr = CreateCommandObjects();
+    if (FAILED(hr))
+        return hr;
+
+    hr = CreateRootSignature();
+    if (FAILED(hr))
+        return hr;
+
+    hr = CreatePipelineState();
     if (FAILED(hr))
         return hr;
 
@@ -99,8 +136,20 @@ HRESULT CD3D12Renderer::CreateCommandObjects()
     if (FAILED(hr))
         return hr;
 
-    // Command lists are initially open.
+    // Command lists are initially open
     hr = m_commandList->Close();
+    if (FAILED(hr))
+        return hr;
+
+    hr = m_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&m_uploadCommandAllocator));
+    if (FAILED(hr))
+        return hr;
+
+    hr = m_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, m_uploadCommandAllocator.Get(), nullptr, IID_PPV_ARGS(&m_uploadCommandList));
+    if (FAILED(hr))
+        return hr;
+
+    hr = m_uploadCommandList->Close();
     if (FAILED(hr))
         return hr;
 
@@ -128,6 +177,10 @@ HRESULT CD3D12Renderer::InitializeSwapChain(UINT width, UINT height)
         return hr;
 
     hr = CreateRenderTargetViews();
+    if (FAILED(hr))
+        return hr;
+
+    hr = CreateVideoSrvHeap();
     if (FAILED(hr))
         return hr;
 
@@ -236,6 +289,81 @@ HRESULT CD3D12Renderer::WaitForGpu()
     return S_OK;
 }
 
+HRESULT CD3D12Renderer::UploadVideoFrame(AVFrame* frame)
+{
+    if (!frame)
+        return E_INVALIDARG;
+
+    if (frame->format != AV_PIX_FMT_YUV420P)
+        return E_NOTIMPL;
+
+    const UINT width = frame->width;
+    const UINT height = frame->height;
+
+    if (width == 0 || height == 0)
+        return E_INVALIDARG;
+
+    const UINT chromaWidth = (width + 1) / 2;
+    const UINT chromaHeight = (height + 1) / 2;
+
+    // 1. Recreate resources if video format or size changes
+    if (m_width != width || m_height != height)
+    {
+        HRESULT hr = CreateVideoTextures(width, height);
+        if (FAILED(hr))
+            return hr;
+
+        CreateVideoSrvs();
+
+        m_width = width;
+        m_height = height;
+    }
+
+    // 2. Wait until previous GPU usage has completed
+    HRESULT hr = WaitForGpu();
+    if (FAILED(hr))
+        return hr;
+
+    // 3. Map upload buffers.
+    BYTE* yMapped = nullptr;
+    BYTE* uMapped = nullptr;
+    BYTE* vMapped = nullptr;
+
+    D3D12_RANGE readRange{ 0, 0 };
+
+    hr = m_yUploadBuffer->Map(0, &readRange, reinterpret_cast<void**>(&yMapped));
+    if (FAILED(hr))
+        return hr;
+
+    hr = m_uUploadBuffer->Map(0, &readRange, reinterpret_cast<void**>(&uMapped));
+    if (FAILED(hr))
+    {
+        m_yUploadBuffer->Unmap(0, nullptr);
+        return hr;
+    }
+
+    hr = m_vUploadBuffer->Map(0, &readRange, reinterpret_cast<void**>(&vMapped));
+    if (FAILED(hr))
+    {
+        m_yUploadBuffer->Unmap(0, nullptr);
+        m_uUploadBuffer->Unmap(0, nullptr);
+        return hr;
+    }
+
+    // 4. Copy AVFrame data to upload buffers
+    CopyPlane(yMapped, m_yRowPitch, frame->data[0], frame->linesize[0], width, height);
+    CopyPlane(uMapped, m_uRowPitch, frame->data[1], frame->linesize[1], chromaWidth, chromaHeight);
+    CopyPlane(vMapped, m_vRowPitch, frame->data[2], frame->linesize[2], chromaWidth, chromaHeight);
+
+    // 5. Unmap upload buffers
+    m_yUploadBuffer->Unmap(0, nullptr);
+    m_uUploadBuffer->Unmap(0, nullptr);
+    m_vUploadBuffer->Unmap(0, nullptr);
+
+    // 6. Copy upload buffers to GPU textures
+    return CopyVideoPlanesToGpu();
+}
+
 void CD3D12Renderer::Render()
 {
     if (!m_swapChain)
@@ -338,6 +466,397 @@ HRESULT CD3D12Renderer::WaitForFrame(FrameContext& frame)
     if (result != WAIT_OBJECT_0)
     {
         return HRESULT_FROM_WIN32(result == WAIT_FAILED ? GetLastError() : ERROR_GEN_FAILURE);
+    }
+
+    return S_OK;
+}
+
+HRESULT CD3D12Renderer::CreateVideoTextures(UINT width, UINT height)
+{
+    const UINT chromaWidth = (width + 1) / 2;
+    const UINT chromaHeight = (height + 1) / 2;
+
+    HRESULT hr = CreatePlaneTexture(width, height, DXGI_FORMAT_R8_UNORM, m_yTexture);
+    if (FAILED(hr))
+        return hr;
+
+    hr = CreatePlaneTexture(chromaWidth, chromaHeight, DXGI_FORMAT_R8_UNORM, m_uTexture);
+    if (FAILED(hr))
+        return hr;
+
+    hr = CreatePlaneTexture(chromaWidth, chromaHeight, DXGI_FORMAT_R8_UNORM, m_vTexture);
+    if (FAILED(hr))
+        return hr;
+
+    m_yUploadInfo = GetPlaneUploadInfo(width, height);
+    m_uUploadInfo = GetPlaneUploadInfo(chromaWidth, chromaHeight);
+    m_vUploadInfo = GetPlaneUploadInfo(chromaWidth, chromaHeight);
+    
+    m_yRowPitch = m_yUploadInfo.footprint.Footprint.RowPitch;
+    m_uRowPitch = m_uUploadInfo.footprint.Footprint.RowPitch;
+    m_vRowPitch = m_vUploadInfo.footprint.Footprint.RowPitch;
+
+    CreateUploadBuffer(m_yUploadInfo.totalBytes, m_yUploadBuffer);
+    CreateUploadBuffer(m_uUploadInfo.totalBytes, m_uUploadBuffer);
+    CreateUploadBuffer(m_vUploadInfo.totalBytes, m_vUploadBuffer);
+
+    return S_OK;
+}
+
+HRESULT CD3D12Renderer::CreatePlaneTexture(UINT width, UINT height, DXGI_FORMAT format, ComPtr<ID3D12Resource>& texture)
+{
+    D3D12_HEAP_PROPERTIES heapProperties{};
+    heapProperties.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    desc.Alignment = 0;
+    desc.Width = width;
+    desc.Height = height;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels = 1;
+    desc.Format = format;
+    desc.SampleDesc.Count = 1;
+    desc.SampleDesc.Quality = 0;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    desc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+    return m_device->CreateCommittedResource(&heapProperties, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&texture));
+}
+
+HRESULT CD3D12Renderer::CreateUploadBuffer(UINT64 size, ComPtr<ID3D12Resource>& buffer)
+{
+    D3D12_HEAP_PROPERTIES heapProperties{};
+    heapProperties.Type = D3D12_HEAP_TYPE_UPLOAD;
+
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    desc.Width = size;
+    desc.Height = 1;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels = 1;
+    desc.SampleDesc.Count = 1;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    return m_device->CreateCommittedResource(&heapProperties, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&buffer));
+}
+
+PlaneUploadInfo CD3D12Renderer::GetPlaneUploadInfo(UINT width, UINT height)
+{
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    desc.Width = width;
+    desc.Height = height;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels = 1;
+    desc.Format = DXGI_FORMAT_R8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+
+    PlaneUploadInfo info{};
+    m_device->GetCopyableFootprints(&desc, 0, 1, 0, &info.footprint, &info.numRows, &info.rowSize, &info.totalBytes);
+
+    return info;
+}
+
+HRESULT CD3D12Renderer::CopyVideoPlanesToGpu()
+{
+    HRESULT hr = m_uploadCommandAllocator->Reset();
+    if (FAILED(hr))
+        return hr;
+
+    hr = m_uploadCommandList->Reset(m_uploadCommandAllocator.Get(), nullptr);
+    if (FAILED(hr))
+        return hr;
+
+    // Transition textures to COPY_DEST before updating
+    if (m_videoTexturesInShaderState)
+    {
+        D3D12_RESOURCE_BARRIER barriers[3]{};
+
+        ID3D12Resource* textures[] =
+        {
+            m_yTexture.Get(),
+            m_uTexture.Get(),
+            m_vTexture.Get()
+        };
+
+        for (UINT i = 0; i < 3; ++i)
+        {
+            barriers[i].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            barriers[i].Transition.pResource = textures[i];
+            barriers[i].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            barriers[i].Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            barriers[i].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+        }
+
+        m_uploadCommandList->ResourceBarrier(3, barriers);
+    }
+
+    // Copy Y, U and V planes
+    CopyPlaneToTexture(m_uploadCommandList.Get(), m_yUploadBuffer.Get(), m_yTexture.Get(), m_yUploadInfo.footprint);
+    CopyPlaneToTexture(m_uploadCommandList.Get(), m_uUploadBuffer.Get(), m_uTexture.Get(), m_uUploadInfo.footprint);
+    CopyPlaneToTexture(m_uploadCommandList.Get(), m_vUploadBuffer.Get(), m_vTexture.Get(), m_vUploadInfo.footprint);
+
+    // Transition textures to PIXEL_SHADER_RESOURCE
+    D3D12_RESOURCE_BARRIER barriers[3]{};
+
+    ID3D12Resource* textures[] =
+    {
+        m_yTexture.Get(),
+        m_uTexture.Get(),
+        m_vTexture.Get()
+    };
+
+    for (UINT i = 0; i < 3; ++i)
+    {
+        barriers[i].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barriers[i].Transition.pResource = textures[i];
+        barriers[i].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        barriers[i].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+        barriers[i].Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    }
+
+    m_uploadCommandList->ResourceBarrier(3, barriers);
+
+    hr = m_uploadCommandList->Close();
+    if (FAILED(hr))
+        return hr;
+
+    ID3D12CommandList* lists[] = { m_uploadCommandList.Get()};
+
+    m_commandQueue->ExecuteCommandLists(1, lists);
+
+    m_videoTexturesInShaderState = true;
+
+    return S_OK;
+}
+
+HRESULT CD3D12Renderer::CreateVideoSrvHeap()
+{
+    D3D12_DESCRIPTOR_HEAP_DESC desc{};
+    desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    desc.NumDescriptors = 3;
+    desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+
+    HRESULT hr = m_device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&m_videoSrvHeap));
+    if (FAILED(hr))
+        return hr;
+
+    m_srvDescriptorSize = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+    return S_OK;
+}
+
+void CD3D12Renderer::CreateVideoSrvs()
+{
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Texture2D.MostDetailedMip = 0;
+    srvDesc.Texture2D.MipLevels = 1;
+    srvDesc.Format = DXGI_FORMAT_R8_UNORM;
+
+    D3D12_CPU_DESCRIPTOR_HANDLE handle = m_videoSrvHeap->GetCPUDescriptorHandleForHeapStart();
+    m_device->CreateShaderResourceView(m_yTexture.Get(), &srvDesc, handle);
+
+    handle.ptr += m_srvDescriptorSize;
+    m_device->CreateShaderResourceView(m_uTexture.Get(), &srvDesc, handle);
+
+    handle.ptr += m_srvDescriptorSize;
+    m_device->CreateShaderResourceView(m_vTexture.Get(), &srvDesc, handle);
+}
+
+HRESULT CD3D12Renderer::CreateRootSignature()
+{
+    // 1. Define SRV Descriptor Range.
+    D3D12_DESCRIPTOR_RANGE srvRange{};
+
+    srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    srvRange.NumDescriptors = 3;
+    srvRange.BaseShaderRegister = 0;
+    srvRange.RegisterSpace = 0;
+    srvRange.OffsetInDescriptorsFromTableStart =
+        D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    // 2. Define Root Parameter.
+    D3D12_ROOT_PARAMETER rootParameter{};
+    rootParameter.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParameter.DescriptorTable.NumDescriptorRanges = 1;
+    rootParameter.DescriptorTable.pDescriptorRanges = &srvRange;
+    rootParameter.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    // 3. Define Static Sampler.
+    D3D12_STATIC_SAMPLER_DESC sampler{};
+    sampler.Filter = D3D12_FILTER_MIN_MAG_LINEAR_MIP_POINT;
+    sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.MipLODBias = 0.0f;
+    sampler.MaxAnisotropy = 1;
+    sampler.ComparisonFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+    sampler.BorderColor = D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK;
+    sampler.MinLOD = 0.0f;
+    sampler.MaxLOD = D3D12_FLOAT32_MAX;
+    sampler.ShaderRegister = 0;
+    sampler.RegisterSpace = 0;
+    sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    // 4. Define Root Signature.
+    D3D12_ROOT_SIGNATURE_DESC rootSignatureDesc{};
+
+    rootSignatureDesc.NumParameters = 1;
+    rootSignatureDesc.pParameters = &rootParameter;
+
+    rootSignatureDesc.NumStaticSamplers = 1;
+    rootSignatureDesc.pStaticSamplers = &sampler;
+
+    rootSignatureDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+
+    // 5. Serialize Root Signature
+    ComPtr<ID3DBlob> signatureBlob;
+    ComPtr<ID3DBlob> errorBlob;
+
+    HRESULT hr = D3D12SerializeRootSignature(&rootSignatureDesc, D3D_ROOT_SIGNATURE_VERSION_1, &signatureBlob, &errorBlob);
+
+    if (FAILED(hr))
+    {
+        if (errorBlob)
+        {
+            OutputDebugStringA(static_cast<const char*>(errorBlob->GetBufferPointer()));
+        }
+
+        return hr;
+    }
+
+    // 6. Create Root Signature
+    return m_device->CreateRootSignature(0, signatureBlob->GetBufferPointer(), signatureBlob->GetBufferSize(), IID_PPV_ARGS(&m_rootSignature));
+}
+
+HRESULT CD3D12Renderer::CreatePipelineState()
+{
+    // 1. Compile shaders
+    HRESULT hr = CompileShader(L"Shaders\\VideoVS.hlsl", "VSMain","vs_5_1", m_vertexShader);
+    if (FAILED(hr))
+        return hr;
+
+    hr = CompileShader(L"Shaders\\VideoPS.hlsl", "PSMain", "ps_5_1", m_pixelShader);
+    if (FAILED(hr))
+        return hr;
+
+    // 2. Initialize PSO description
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc{};
+    psoDesc.pRootSignature = m_rootSignature.Get();
+    psoDesc.VS.pShaderBytecode = m_vertexShader->GetBufferPointer();
+    psoDesc.VS.BytecodeLength = m_vertexShader->GetBufferSize();
+    psoDesc.PS.pShaderBytecode = m_pixelShader->GetBufferPointer();
+    psoDesc.PS.BytecodeLength = m_pixelShader->GetBufferSize();
+
+    //D3D12_DEPTH_STENCIL_DESC& ds = psoDesc.DepthStencilState;
+    //ds.DepthEnable = FALSE;
+    //ds.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    //ds.DepthFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+    //ds.StencilEnable = FALSE;
+    //ds.StencilReadMask = D3D12_DEFAULT_STENCIL_READ_MASK;
+    //ds.StencilWriteMask = D3D12_DEFAULT_STENCIL_WRITE_MASK;
+    //ds.FrontFace.StencilFailOp = D3D12_STENCIL_OP_KEEP;
+    //ds.FrontFace.StencilDepthFailOp = D3D12_STENCIL_OP_KEEP;
+    //ds.FrontFace.StencilPassOp = D3D12_STENCIL_OP_KEEP;
+    //ds.FrontFace.StencilFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+    //ds.BackFace.StencilFailOp = D3D12_STENCIL_OP_KEEP;
+    //ds.BackFace.StencilDepthFailOp = D3D12_STENCIL_OP_KEEP;
+    //ds.BackFace.StencilPassOp = D3D12_STENCIL_OP_KEEP;
+    //ds.BackFace.StencilFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+
+    // 3. Blend State
+    D3D12_BLEND_DESC& blendDesc = psoDesc.BlendState;
+    blendDesc.AlphaToCoverageEnable = FALSE;
+    blendDesc.IndependentBlendEnable = FALSE;
+
+    D3D12_RENDER_TARGET_BLEND_DESC& rtBlend = blendDesc.RenderTarget[0];
+    rtBlend.BlendEnable = FALSE;
+    rtBlend.LogicOpEnable = FALSE;
+    rtBlend.SrcBlend = D3D12_BLEND_ONE;
+    rtBlend.DestBlend = D3D12_BLEND_ZERO;
+    rtBlend.BlendOp = D3D12_BLEND_OP_ADD;
+    rtBlend.SrcBlendAlpha = D3D12_BLEND_ONE;
+    rtBlend.DestBlendAlpha = D3D12_BLEND_ZERO;
+    rtBlend.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+    rtBlend.LogicOp = D3D12_LOGIC_OP_NOOP;
+    rtBlend.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+
+    // 4. Rasterizer State
+    D3D12_RASTERIZER_DESC& rasterizerDesc = psoDesc.RasterizerState;
+    rasterizerDesc.FillMode = D3D12_FILL_MODE_SOLID;
+    rasterizerDesc.CullMode = D3D12_CULL_MODE_NONE;
+    rasterizerDesc.FrontCounterClockwise = FALSE;
+    rasterizerDesc.DepthBias = D3D12_DEFAULT_DEPTH_BIAS;
+    rasterizerDesc.DepthBiasClamp = D3D12_DEFAULT_DEPTH_BIAS_CLAMP;
+    rasterizerDesc.SlopeScaledDepthBias = D3D12_DEFAULT_SLOPE_SCALED_DEPTH_BIAS;
+    rasterizerDesc.DepthClipEnable = TRUE;
+    rasterizerDesc.MultisampleEnable = FALSE;
+    rasterizerDesc.AntialiasedLineEnable = FALSE;
+    rasterizerDesc.ForcedSampleCount = 0;
+    rasterizerDesc.ConservativeRaster = D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF;
+
+    // 5. Depth / Stencil State
+    D3D12_DEPTH_STENCIL_DESC& depthStencilDesc = psoDesc.DepthStencilState;
+    depthStencilDesc.DepthEnable = FALSE;
+    depthStencilDesc.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    depthStencilDesc.DepthFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+    depthStencilDesc.StencilEnable = FALSE;
+    depthStencilDesc.StencilReadMask = D3D12_DEFAULT_STENCIL_READ_MASK;
+    depthStencilDesc.StencilWriteMask = D3D12_DEFAULT_STENCIL_WRITE_MASK;
+
+    // 6. Input Layout
+    psoDesc.InputLayout.pInputElementDescs = nullptr;
+    psoDesc.InputLayout.NumElements = 0;
+
+    // 7. Primitive Topology
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+
+    // 8. Render Target
+    psoDesc.NumRenderTargets = 1;
+    psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    psoDesc.DSVFormat = DXGI_FORMAT_UNKNOWN;
+
+    // 9. Multisampling
+    psoDesc.SampleDesc.Count = 1;
+    psoDesc.SampleDesc.Quality = 0;
+
+    // 10. Other settings
+    psoDesc.SampleMask = UINT_MAX;
+    psoDesc.NodeMask = 0;
+    psoDesc.Flags = D3D12_PIPELINE_STATE_FLAG_NONE;
+
+    // 11. Create PSO
+    return m_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&m_pipelineState));
+}
+
+HRESULT CD3D12Renderer::CompileShader(const std::wstring& filename, const char* entryPoint, const char* target, ComPtr<ID3DBlob>& shaderBlob)
+{
+    UINT compileFlags = 0;
+
+#if defined(_DEBUG)
+    compileFlags |= D3DCOMPILE_DEBUG;
+    compileFlags |= D3DCOMPILE_SKIP_OPTIMIZATION;
+#else
+    compileFlags |= D3DCOMPILE_OPTIMIZATION_LEVEL3;
+#endif
+
+    ComPtr<ID3DBlob> errorBlob;
+
+    HRESULT hr = D3DCompileFromFile(filename.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, entryPoint, target, compileFlags, 0, &shaderBlob, &errorBlob);
+
+    if (FAILED(hr))
+    {
+        if (errorBlob)
+        {
+            OutputDebugStringA(
+                static_cast<const char*>(errorBlob->GetBufferPointer()));
+        }
+
+        return hr;
     }
 
     return S_OK;

@@ -21,6 +21,14 @@ struct FrameContext
     UINT64 fenceValue{ 0 };
 };
 
+struct PlaneUploadInfo
+{
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
+    UINT numRows{ 0 };
+    UINT64 rowSize{ 0 };
+    UINT64 totalBytes{ 0 };
+};
+
 namespace
 {
     constexpr UINT FRAME_COUNT = 2;
@@ -32,8 +40,8 @@ public:
     HRESULT Initialize(HWND hwnd);
     HRESULT Resize(UINT width, UINT height);
     void Shutdown();
+    HRESULT UploadVideoFrame(AVFrame* frame);
     void Render();
-    HRESULT RenderFrame(AVFrame* frame) { return S_OK; }
     HANDLE GetFrameLatencyWaitableObject() const { return m_frameLatencyWaitableObject; }
 
 private:
@@ -41,6 +49,16 @@ private:
     HRESULT CreateCommandObjects();
     HRESULT CreateSwapChain(HWND hwnd);
     HRESULT CreateRenderTargetViews();
+    HRESULT CreateRootSignature();
+    HRESULT CreatePipelineState();
+    HRESULT CompileShader(const std::wstring& filename, const char* entryPoint, const char* target, ComPtr<ID3DBlob>& shaderBlob);
+    HRESULT CreateVideoSrvHeap();
+    void CreateVideoSrvs();
+    HRESULT CreateVideoTextures(UINT width, UINT height);
+    HRESULT CreatePlaneTexture(UINT width, UINT height, DXGI_FORMAT format, ComPtr<ID3D12Resource>& texture);
+    HRESULT CreateUploadBuffer(UINT64 size, ComPtr<ID3D12Resource>& buffer);
+    PlaneUploadInfo GetPlaneUploadInfo(UINT width, UINT height);
+    HRESULT CopyVideoPlanesToGpu();
     HRESULT WaitForGpu();
     HRESULT WaitForFrame(FrameContext& frame);
 
@@ -51,6 +69,7 @@ private:
     ComPtr<ID3D12CommandQueue> m_commandQueue;
     ComPtr<IDXGISwapChain3> m_swapChain;
 
+    // SwapChain Back Buffer RTVs
     ComPtr<ID3D12DescriptorHeap> m_rtvHeap;
     std::array<D3D12_CPU_DESCRIPTOR_HANDLE, FRAME_COUNT> m_rtvHandles;
     std::array<ComPtr<ID3D12Resource>, FRAME_COUNT> m_renderTargets;
@@ -66,4 +85,34 @@ private:
 
     UINT m_width{ 0 };
     UINT m_height{ 0 };
+
+    ComPtr<ID3D12Resource> m_yTexture;
+    ComPtr<ID3D12Resource> m_uTexture;
+    ComPtr<ID3D12Resource> m_vTexture;
+
+    ComPtr<ID3D12Resource> m_yUploadBuffer;
+    ComPtr<ID3D12Resource> m_uUploadBuffer;
+    ComPtr<ID3D12Resource> m_vUploadBuffer;
+
+    PlaneUploadInfo m_yUploadInfo;
+    PlaneUploadInfo m_uUploadInfo;
+    PlaneUploadInfo m_vUploadInfo;
+
+    UINT m_yRowPitch{ 0 };
+    UINT m_uRowPitch{ 0 };
+    UINT m_vRowPitch{ 0 };
+
+    ComPtr<ID3D12CommandAllocator> m_uploadCommandAllocator;
+    ComPtr<ID3D12GraphicsCommandList> m_uploadCommandList;
+
+    bool m_videoTexturesInShaderState{ false };
+
+    // Video Texture SRVs
+    ComPtr<ID3D12DescriptorHeap> m_videoSrvHeap;
+    UINT m_srvDescriptorSize{ 0 };
+
+    ComPtr<ID3D12RootSignature> m_rootSignature;
+    ComPtr<ID3D12PipelineState> m_pipelineState;
+    ComPtr<ID3DBlob> m_vertexShader;
+    ComPtr<ID3DBlob> m_pixelShader;
 };
