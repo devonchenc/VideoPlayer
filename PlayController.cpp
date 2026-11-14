@@ -27,13 +27,6 @@ CPlayController::~CPlayController()
     Stop();
 }
 
-void CPlayController::LogFFmpegError(const char* operation, int error)
-{
-    char buffer[AV_ERROR_MAX_STRING_SIZE]{};
-    av_strerror(error, buffer, sizeof(buffer));
-    std::cerr << operation << " failed: " << buffer << std::endl;
-}
-
 bool CPlayController::Initialize()
 {
     Stop();
@@ -53,6 +46,147 @@ bool CPlayController::Initialize()
     return true;
 }
 
+bool CPlayController::PlayLive(const std::string& url)
+{
+    if (!Initialize())
+        return false;
+
+    m_url = url;
+    m_streamType = StreamType::Live;
+
+    StartThreads();
+
+    return true;
+}
+
+bool CPlayController::PlayRecorded(const std::string& url)
+{
+    if (!Initialize())
+        return false;
+
+    m_url = url;
+    m_streamType = StreamType::Recorded;
+
+    StartThreads();
+
+    return true;
+}
+
+void CPlayController::Stop()
+{
+    m_stopping = true;
+
+    m_demuxThread.request_stop();
+    m_videoDecodeThread.request_stop();
+
+    m_videoPacketQueue.Close();
+    m_videoFrameQueue.Close();
+
+    if (m_demuxThread.joinable())
+        m_demuxThread.join();
+    if (m_videoDecodeThread.joinable())
+        m_videoDecodeThread.join();
+
+    m_videoCodecContext.reset();
+    m_formatContext.reset();
+
+    m_videoAVStream = nullptr;
+    m_videoStreamIndex = -1;
+
+    m_videoClockStarted = false;
+    m_videoDone = false;
+}
+
+void CPlayController::Pause()
+{
+    if (m_playbackState == PlaybackState::Stopped)
+        return;
+
+    if (m_playbackState.exchange(PlaybackState::Paused) == PlaybackState::Paused)
+        return;
+
+    if (m_streamType == StreamType::Live)
+    {
+        m_videoFrameQueue.SetDropOldestWhenFull(true);
+    }
+}
+
+void CPlayController::Resume()
+{
+    if (m_playbackState != PlaybackState::Paused)
+        return;
+
+    if (m_streamType == StreamType::Live)
+    {
+        m_videoFrameQueue.Clear();
+        m_videoFrameQueue.SetDropOldestWhenFull(false);
+    }
+
+    m_playbackState = PlaybackState::Playing;
+
+    NotifyDataReady();
+}
+
+void CPlayController::StartThreads()
+{
+    m_demuxThread = std::jthread([this](std::stop_token token) { DemuxThread(token); });
+
+    m_videoDecodeThread = std::jthread([this](std::stop_token token) { VideoDecodeThread(token); });
+}
+
+void CPlayController::DemuxThread(std::stop_token stopToken)
+{
+    if (!InitializeFFmpeg(m_url))
+    {
+        m_stopping = true;
+        return;
+    }
+
+    while (!stopToken.stop_requested() && !m_stopping)
+    {
+        PacketPtr packet(av_packet_alloc());
+        if (!packet)
+            break;
+
+        const int result = av_read_frame(m_formatContext.get(), packet.get());
+        if (result < 0)
+        {
+            if (result != AVERROR_EOF && !m_stopping)
+                LogFFmpegError("av_read_frame", result);
+            break;
+        }
+
+        if (packet->stream_index == m_videoStreamIndex)
+        {
+            if (!m_videoPacketQueue.Push(std::move(packet), stopToken))
+                break;
+        }
+    }
+
+    m_videoPacketQueue.Close();
+}
+
+void CPlayController::VideoDecodeThread(std::stop_token stopToken)
+{
+    PacketPtr packet;
+
+    while (!stopToken.stop_requested() && m_videoPacketQueue.Pop(packet, stopToken))
+    {
+        if (!DecodeVideoPacket(packet.get(), stopToken))
+        {
+            std::cerr << "Video decoding failed" << std::endl;
+            break;
+        }
+        packet.reset();
+    }
+
+    if (!stopToken.stop_requested() && !m_stopping)
+        FlushVideoDecoder(stopToken);
+
+    m_videoDone = true;
+    NotifyDataReady();
+}
+
 bool CPlayController::InitializeFFmpeg(const std::string& url)
 {
     AVFormatContext* rawFormat = avformat_alloc_context();
@@ -67,8 +201,7 @@ bool CPlayController::InitializeFFmpeg(const std::string& url)
 
     AVDictionary* options = nullptr;
     av_dict_set(&options, "rtsp_transport", "tcp", 0);
-    // rw_timeout is in microseconds for FFmpeg protocols that support it
-    av_dict_set(&options, "rw_timeout", "5000000", 0);
+    av_dict_set(&options, "timeout", "5000000", 0);
 
     const int openResult = avformat_open_input(&rawFormat, url.c_str(), nullptr, &options);
     av_dict_free(&options);
@@ -91,7 +224,6 @@ bool CPlayController::InitializeFFmpeg(const std::string& url)
     }
 
     m_videoStreamIndex = av_find_best_stream(m_formatContext.get(), AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
-
     if (m_videoStreamIndex < 0)
     {
         std::cerr << "The input has no decodable video stream" << std::endl;
@@ -167,127 +299,17 @@ bool CPlayController::InitializeVideoDecoder()
     return true;
 }
 
-double CPlayController::NormalizeTimestamp(std::int64_t timestamp, AVRational timeBase) const
+/* static */int CPlayController::InterruptCallback(void* opaque)
 {
-    if (timestamp == AV_NOPTS_VALUE)
-        return std::numeric_limits<double>::quiet_NaN();
-    else
-        return static_cast<double>(timestamp) * av_q2d(timeBase) - m_timestampOrigin;
-}
-
-int CPlayController::InterruptCallback(void* opaque)
-{
-    const auto* player = static_cast<CPlayController*>(opaque);
+    const CPlayController* player = static_cast<CPlayController*>(opaque);
     return player->m_stopping ? 1 : 0;
 }
 
-void CPlayController::StartThreads()
+void CPlayController::LogFFmpegError(const char* operation, int error)
 {
-    m_demuxThread = std::jthread([this](std::stop_token token) { DemuxThread(token); });
-
-    m_videoDecodeThread = std::jthread([this](std::stop_token token) { VideoDecodeThread(token); });
-}
-
-void CPlayController::Stop()
-{
-    m_stopping = true;
-
-    m_demuxThread.request_stop();
-    m_videoDecodeThread.request_stop();
-
-    m_videoPacketQueue.Close();
-    m_videoFrameQueue.Close();
-
-    if (m_demuxThread.joinable())
-        m_demuxThread.join();
-    if (m_videoDecodeThread.joinable())
-        m_videoDecodeThread.join();
-
-    m_videoCodecContext.reset();
-    m_formatContext.reset();
-
-    m_videoAVStream = nullptr;
-    m_videoStreamIndex = -1;
-
-    m_videoClockStarted = false;
-    m_videoDone = false;
-}
-
-void CPlayController::Pause()
-{
-    if (m_playbackState == PlaybackState::Stopped)
-        return;
-
-    if (m_playbackState.exchange(PlaybackState::Paused) == PlaybackState::Paused)
-        return;
-
-    if (m_streamType == StreamType::Live)
-    {
-        m_videoFrameQueue.SetDropOldestWhenFull(true);
-    }
-}
-
-void CPlayController::Resume()
-{
-    if (m_playbackState != PlaybackState::Paused)
-        return;
-
-    if (m_streamType == StreamType::Live)
-    {
-        m_videoFrameQueue.Clear();
-        m_videoFrameQueue.SetDropOldestWhenFull(false);
-    }
-
-    m_playbackState = PlaybackState::Playing;
-
-    NotifyDataReady();
-}
-
-void CPlayController::DemuxThread(std::stop_token stopToken)
-{
-    while (!stopToken.stop_requested() && !m_stopping)
-    {
-        PacketPtr packet(av_packet_alloc());
-        if (!packet)
-            break;
-
-        const int result = av_read_frame(m_formatContext.get(), packet.get());
-        if (result < 0)
-        {
-            if (result != AVERROR_EOF && !m_stopping)
-                LogFFmpegError("av_read_frame", result);
-            break;
-        }
-
-        if (packet->stream_index == m_videoStreamIndex)
-        {
-            if (!m_videoPacketQueue.Push(std::move(packet), stopToken))
-                break;
-        }
-    }
-
-    m_videoPacketQueue.Close();
-}
-
-void CPlayController::VideoDecodeThread(std::stop_token stopToken)
-{
-    PacketPtr packet;
-
-    while (!stopToken.stop_requested() && m_videoPacketQueue.Pop(packet, stopToken))
-    {
-        if (!DecodeVideoPacket(packet.get(), stopToken))
-        {
-            std::cerr << "Video decoding failed" << std::endl;
-            break;
-        }
-        packet.reset();
-    }
-
-    if (!stopToken.stop_requested() && !m_stopping)
-        FlushVideoDecoder(stopToken);
-
-    m_videoDone = true;
-    NotifyDataReady();
+    char buffer[AV_ERROR_MAX_STRING_SIZE]{};
+    av_strerror(error, buffer, sizeof(buffer));
+    std::cerr << operation << " failed: " << buffer << std::endl;
 }
 
 bool CPlayController::DecodeVideoPacket(AVPacket* packet, std::stop_token stopToken)
@@ -383,6 +405,14 @@ void CPlayController::NotifyDataReady()
     SetEvent(m_videoFrameEvent);
 }
 
+double CPlayController::NormalizeTimestamp(std::int64_t timestamp, AVRational timeBase) const
+{
+    if (timestamp == AV_NOPTS_VALUE)
+        return std::numeric_limits<double>::quiet_NaN();
+    else
+        return static_cast<double>(timestamp) * av_q2d(timeBase) - m_timestampOrigin;
+}
+
 double CPlayController::GetMasterClock() const
 {
     if (!m_videoClockStarted)
@@ -413,42 +443,6 @@ bool CPlayController::TryGetVideoFrame(VideoFrame& frame)
     }
 
     return result;
-}
-
-bool CPlayController::PlayLive(const std::string& url)
-{
-    if (!Initialize())
-        return false;
-
-    if (!InitializeFFmpeg(url))
-    {
-        Stop();
-        return false;
-    }
-
-    m_streamType = StreamType::Live;
-
-    StartThreads();
-
-    return true;
-}
-
-bool CPlayController::PlayRecorded(const std::string& url)
-{
-    if (!Initialize())
-        return false;
-
-    if (!InitializeFFmpeg(url))
-    {
-        Stop();
-        return false;
-    }
-
-    m_streamType = StreamType::Recorded;
-
-    StartThreads();
-
-    return true;
 }
 
 size_t CPlayController::GetMaxVideoFrameQueueSize() const

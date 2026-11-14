@@ -38,7 +38,6 @@ HRESULT CPlayerInstance::Initialize(HWND parentWnd)
     if (m_hwnd == nullptr)
         return HRESULT_FROM_WIN32(GetLastError());
 
-    // Initialize D3D12 renderer
     HRESULT hr = m_renderer->Initialize(m_hwnd);
     if (FAILED(hr))
         return hr;
@@ -115,6 +114,8 @@ HRESULT CPlayerInstance::PlayStop()
 
     m_commandQueue.push(PlayerCommand{ PlayerCommandType::Stop });
     SetEvent(m_commandEvent);
+
+    m_controller->Stop();
 
     return S_OK;
 }
@@ -360,8 +361,6 @@ RenderWaitResult CPlayerInstance::WaitForRenderEvents(DWORD timeoutMs, bool wait
     {
         handles[count++] = m_renderTimer;
     }
-
-    const DWORD waitTimeout = (timeoutMs == 0) ? 0 : INFINITE;
 
     const DWORD result = WaitForMultipleObjects(count, handles, FALSE, INFINITE);
 

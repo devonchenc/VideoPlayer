@@ -38,20 +38,17 @@ public:
     void Resume();
     bool IsPaused() const { return m_playbackState == PlaybackState::Paused; }
 
+    double GetMasterClock() const;
     bool TryGetVideoFrame(VideoFrame& frame);
     HANDLE GetVideoFrameEvent() const { return m_videoFrameEvent; }
-    double GetMasterClock() const;
 
 private:
+    void StartThreads();
+    void DemuxThread(std::stop_token stopToken);
+    void VideoDecodeThread(std::stop_token stopToken);
 
     bool InitializeFFmpeg(const std::string& url);
     bool InitializeVideoDecoder();
-    bool InitializeSDL();
-
-    void StartThreads();
-
-    void DemuxThread(std::stop_token stopToken);
-    void VideoDecodeThread(std::stop_token stopToken);
 
     bool DecodeVideoPacket(AVPacket* packet, std::stop_token stopToken);
     bool ReceiveVideoFrames(std::stop_token stopToken);
@@ -104,6 +101,7 @@ private:
 
     PlayerConfig m_config;
 
+    std::string m_url;
     StreamType m_streamType{ StreamType::Live };
     std::atomic<PlaybackState> m_playbackState{ PlaybackState::Stopped };
 };
