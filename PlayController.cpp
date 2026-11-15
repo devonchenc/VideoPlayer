@@ -34,7 +34,6 @@ bool CPlayController::Initialize()
     m_videoPacketQueue.Reset();
     m_videoFrameQueue.Reset();
 
-    m_stopping = false;
     m_videoDone = false;
     m_videoFrameEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
 
@@ -74,10 +73,7 @@ bool CPlayController::PlayRecorded(const std::string& url)
 
 void CPlayController::Stop()
 {
-    m_stopping = true;
-
-    m_demuxThread.request_stop();
-    m_videoDecodeThread.request_stop();
+    m_stopSource.request_stop();
 
     m_videoPacketQueue.Close();
     m_videoFrameQueue.Close();
@@ -99,50 +95,46 @@ void CPlayController::Stop()
 
 void CPlayController::Pause()
 {
-    if (m_playbackState == PlaybackState::Stopped)
-        return;
-
-    if (m_playbackState.exchange(PlaybackState::Paused) == PlaybackState::Paused)
-        return;
-
     if (m_streamType == StreamType::Live)
     {
         m_videoFrameQueue.SetDropOldestWhenFull(true);
     }
+
+    PauseMasterClock();
 }
 
 void CPlayController::Resume()
 {
-    if (m_playbackState != PlaybackState::Paused)
-        return;
-
     if (m_streamType == StreamType::Live)
     {
         m_videoFrameQueue.Clear();
         m_videoFrameQueue.SetDropOldestWhenFull(false);
     }
 
-    m_playbackState = PlaybackState::Playing;
+    ResumeMasterClock();
 
     NotifyDataReady();
 }
 
 void CPlayController::StartThreads()
 {
-    m_demuxThread = std::jthread([this](std::stop_token token) { DemuxThread(token); });
+    m_stopSource = std::stop_source{};
+    const std::stop_token token = m_stopSource.get_token();
 
-    m_videoDecodeThread = std::jthread([this](std::stop_token token) { VideoDecodeThread(token); });
+    m_demuxThread = std::jthread([this, token]() { DemuxThread(token); });
+
+    m_videoDecodeThread = std::jthread([this, token]() { VideoDecodeThread(token); });
 }
 
 void CPlayController::DemuxThread(std::stop_token stopToken)
 {
     if (!InitializeFFmpeg(m_url))
     {
-        m_stopping = true;
+        m_stopSource.request_stop();
         return;
     }
 
-    while (!stopToken.stop_requested() && !m_stopping)
+    while (!stopToken.stop_requested())
     {
         PacketPtr packet(av_packet_alloc());
         if (!packet)
@@ -151,7 +143,7 @@ void CPlayController::DemuxThread(std::stop_token stopToken)
         const int result = av_read_frame(m_formatContext.get(), packet.get());
         if (result < 0)
         {
-            if (result != AVERROR_EOF && !m_stopping)
+            if (result != AVERROR_EOF)
                 LogFFmpegError("av_read_frame", result);
             break;
         }
@@ -180,7 +172,7 @@ void CPlayController::VideoDecodeThread(std::stop_token stopToken)
         packet.reset();
     }
 
-    if (!stopToken.stop_requested() && !m_stopping)
+    if (!stopToken.stop_requested())
         FlushVideoDecoder(stopToken);
 
     m_videoDone = true;
@@ -197,7 +189,7 @@ bool CPlayController::InitializeFFmpeg(const std::string& url)
     }
 
     rawFormat->interrupt_callback.callback = &CPlayController::InterruptCallback;
-    rawFormat->interrupt_callback.opaque = this;
+    rawFormat->interrupt_callback.opaque = &m_stopSource;
 
     AVDictionary* options = nullptr;
     av_dict_set(&options, "rtsp_transport", "tcp", 0);
@@ -301,8 +293,8 @@ bool CPlayController::InitializeVideoDecoder()
 
 /* static */int CPlayController::InterruptCallback(void* opaque)
 {
-    const CPlayController* player = static_cast<CPlayController*>(opaque);
-    return player->m_stopping ? 1 : 0;
+    std::stop_token* token = static_cast<std::stop_token*>(opaque);
+    return token->stop_requested() ? 1 : 0;
 }
 
 void CPlayController::LogFFmpegError(const char* operation, int error)
@@ -398,9 +390,6 @@ bool CPlayController::FlushVideoDecoder(std::stop_token stopToken)
 
 void CPlayController::NotifyDataReady()
 {
-    if (m_stopping)
-        return;
-
     // Notify Render Thread
     SetEvent(m_videoFrameEvent);
 }
@@ -418,9 +407,31 @@ double CPlayController::GetMasterClock() const
     if (!m_videoClockStarted)
         return 0.0;
 
+    if (m_clockPaused)
+        return m_pausedClock;
+
     const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - m_videoClockBaseTime).count();
 
     return m_videoClockBasePts + elapsed;
+}
+
+void CPlayController::PauseMasterClock()
+{
+    if (m_clockPaused)
+        return;
+
+    m_pausedClock = GetMasterClock();
+    m_clockPaused = true;
+}
+
+void CPlayController::ResumeMasterClock()
+{
+    if (!m_clockPaused)
+        return;
+
+    m_videoClockBasePts = m_pausedClock;
+    m_videoClockBaseTime = std::chrono::steady_clock::now();
+    m_clockPaused = false;
 }
 
 bool CPlayController::TryGetVideoFrame(VideoFrame& frame)

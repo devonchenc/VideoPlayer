@@ -96,19 +96,45 @@ void CVideoPlayerView::OnSize(UINT nType, int cx, int cy)
 
 void CVideoPlayerView::OnButtonPlay()
 {
-	HRESULT hr = PlayLive(m_playerInstance, 1, 1);
-	if (FAILED(hr))
+	if (m_playbackState == PlaybackState::Paused)
 	{
-		AfxMessageBox(_T("Failed to play."));
+		HRESULT hr = PlayResume(m_playerInstance);
+		if (FAILED(hr))
+		{
+			AfxMessageBox(_T("Failed to resume."));
+		}
+		else
+		{
+			m_playbackState = PlaybackState::Playing;
+		}
+	}
+	else
+	{
+		HRESULT hr = PlayLive(m_playerInstance, 1, 1);
+		if (FAILED(hr))
+		{
+			AfxMessageBox(_T("Failed to play."));
+		}
+		else
+		{
+			m_playbackState = PlaybackState::Playing;
+		}
 	}
 }
 
 void CVideoPlayerView::OnButtonPause()
 {
-	HRESULT hr = PlayPause(m_playerInstance);
-	if (FAILED(hr))
+	if (m_playbackState == PlaybackState::Playing)
 	{
-		AfxMessageBox(_T("Failed to pause."));
+		HRESULT hr = PlayPause(m_playerInstance);
+		if (FAILED(hr))
+		{
+			AfxMessageBox(_T("Failed to pause."));
+		}
+		else
+		{
+			m_playbackState = PlaybackState::Paused;
+		}
 	}
 }
 
@@ -118,5 +144,9 @@ void CVideoPlayerView::OnButtonStop()
 	if (FAILED(hr))
 	{
 		AfxMessageBox(_T("Failed to stop."));
+	}
+	else
+	{
+		m_playbackState = PlaybackState::Stopped;
 	}
 }

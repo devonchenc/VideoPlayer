@@ -1,5 +1,12 @@
 #pragma once
 
+enum class PlaybackState
+{
+	Playing,
+	Paused,
+	Stopped
+};
+
 class CVideoPlayerView : public CView
 {
 protected:
@@ -35,6 +42,7 @@ protected:
 
 private:
 	long m_playerInstance{ 0 };
+	PlaybackState m_playbackState{ PlaybackState::Stopped };
 };
 
 #ifndef _DEBUG  // debug version in VideoPlayerView.cpp

@@ -220,6 +220,36 @@ void CPlayerInstance::ProcessPendingCommands(std::stop_token stopToken)
             if (m_playbackState != PlaybackState::Stopped)
                 break;
 
+            m_pendingVideoFrame.reset();
+            m_playbackState = PlaybackState::Playing;
+            break;
+        }
+        case PlayerCommandType::Stop:
+        {
+            if (m_playbackState == PlaybackState::Stopped)
+                break;
+
+            m_controller->Stop();
+            m_playbackState = PlaybackState::Stopped;
+            break;
+        }
+        case PlayerCommandType::Pause:
+        {
+            if (m_playbackState == PlaybackState::Stopped)
+                break;
+
+            if (m_playbackState.exchange(PlaybackState::Paused) == PlaybackState::Paused)
+                break;
+
+            m_controller->Pause();
+            break;
+        }
+        case PlayerCommandType::Resume:
+        {
+            if (m_playbackState != PlaybackState::Paused)
+                break;
+
+            m_controller->Resume();
             m_playbackState = PlaybackState::Playing;
             break;
         }

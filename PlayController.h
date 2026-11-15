@@ -36,7 +36,6 @@ public:
     void Stop();
     void Pause();
     void Resume();
-    bool IsPaused() const { return m_playbackState == PlaybackState::Paused; }
 
     double GetMasterClock() const;
     bool TryGetVideoFrame(VideoFrame& frame);
@@ -56,6 +55,8 @@ private:
     void NotifyDataReady();
 
     double NormalizeTimestamp(std::int64_t timestamp, AVRational timeBase) const;
+    void PauseMasterClock();
+    void ResumeMasterClock();
 
     static int InterruptCallback(void* opaque);
     static void LogFFmpegError(const char* operation, int error);
@@ -81,18 +82,21 @@ private:
     // Worker threads
     std::jthread m_demuxThread;
     std::jthread m_videoDecodeThread;
+    std::stop_source m_stopSource;
 
-    std::atomic<bool> m_stopping{ false };
     std::atomic<bool> m_videoDone{ false };
 
     // Video decoder thread only
     double m_videoNextPts{ 0.0 };
     bool m_videoNextPtsValid{ false };
 
-    // Main thread only: pending video frame and video clock
+    // Pending video frame and video clock
     bool m_videoClockStarted{ false };
     double m_videoClockBasePts{ 0.0 };
     std::chrono::steady_clock::time_point m_videoClockBaseTime{};
+
+    bool m_clockPaused{ false };
+    double m_pausedClock{ 0.0 };
 
     // FPS stats
     std::chrono::steady_clock::time_point m_lastStatsTime{};
@@ -103,5 +107,4 @@ private:
 
     std::string m_url;
     StreamType m_streamType{ StreamType::Live };
-    std::atomic<PlaybackState> m_playbackState{ PlaybackState::Stopped };
 };
