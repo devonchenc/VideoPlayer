@@ -31,6 +31,8 @@ bool CPlayController::Initialize()
     m_videoDone = false;
     m_videoFrameEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
 
+    m_rgbFrame.reset(av_frame_alloc());
+
     m_videoNextPts = 0.0;
     m_videoNextPtsValid = false;
 
@@ -434,22 +436,29 @@ void CPlayController::ResumeMasterClock()
 
 bool CPlayController::TryGetVideoFrame(VideoFrame& frame)
 {
-    bool result = m_videoFrameQueue.TryPop(frame);
-
+    VideoFrame yuvFrame;
+    bool result = m_videoFrameQueue.TryPop(yuvFrame);
     if (result)
     {
-        // Start video clock
-        if (!m_videoClockStarted)
+        result = ConvertFrameToBGRA(yuvFrame.frame.get());
+        if (result)
         {
-            m_videoClockBasePts = frame.pts;
-            m_videoClockBaseTime = std::chrono::steady_clock::now();
-            m_videoClockStarted = true;
+            // Start video clock
+            if (!m_videoClockStarted)
+            {
+                m_videoClockBasePts = yuvFrame.pts;
+                m_videoClockBaseTime = std::chrono::steady_clock::now();
+                m_videoClockStarted = true;
+            }
+
+            frame.frame = std::move(m_rgbFrame);
+            frame.pts = yuvFrame.pts;
+
+            return true;
         }
     }
-    else
-    {
-        ResetEvent(m_videoFrameEvent);
-    }
+
+    ResetEvent(m_videoFrameEvent);
 
     return result;
 }
@@ -465,6 +474,51 @@ size_t CPlayController::GetMaxVideoFrameQueueSize() const
     const double bufferSeconds = std::chrono::duration<double>(m_config.videoBufferDurationMs).count();
 
     return std::max<size_t>(1, static_cast<size_t>(std::ceil(fps * bufferSeconds)));
+}
+
+bool CPlayController::ConvertFrameToBGRA(AVFrame* srcFrame)
+{
+    m_rgbFrame.reset(av_frame_alloc());
+
+    if (!srcFrame)
+        return false;
+
+    if (srcFrame->width <= 0 || srcFrame->height <= 0)
+        return false;
+
+    if (srcFrame->format == AV_PIX_FMT_NONE)
+        return false;
+
+    const int width = srcFrame->width;
+    const int height = srcFrame->height;
+    const auto srcFormat = static_cast<AVPixelFormat>(srcFrame->format);
+
+    // Update SwsContext if the source properties have changed
+    m_swsContext = sws_getCachedContext(m_swsContext, width, height, srcFormat, width, height, AV_PIX_FMT_BGRA, SWS_BILINEAR, nullptr, nullptr, nullptr);
+    if (!m_swsContext)
+        return false;
+
+    // Release the previous frame buffer
+    av_frame_unref(m_rgbFrame.get());
+
+    // Configure destination frame
+    m_rgbFrame->format = AV_PIX_FMT_BGRA;
+    m_rgbFrame->width = width;
+    m_rgbFrame->height = height;
+
+    // Allocate destination buffer
+    if (av_frame_get_buffer(m_rgbFrame.get(), 32) < 0)
+        return false;
+
+    // Convert source frame to BGRA
+    const int outputHeight = sws_scale(m_swsContext, srcFrame->data, srcFrame->linesize, 0, height, m_rgbFrame->data, m_rgbFrame->linesize);
+    if (outputHeight != height)
+    {
+        av_frame_unref(m_rgbFrame.get());
+        return false;
+    }
+
+    return true;
 }
 
 void CPlayController::PrintStatistics()

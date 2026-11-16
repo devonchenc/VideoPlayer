@@ -55,8 +55,8 @@ private:
     HRESULT CreatePipelineState();
     HRESULT CompileShader(const std::wstring& filename, const char* entryPoint, const char* target, ComPtr<ID3DBlob>& shaderBlob);
     HRESULT CreateVideoSrvHeap();
-    void CreateVideoSrvs();
-    HRESULT CreateVideoTextures(UINT width, UINT height);
+    void CreateVideoSrv();
+    HRESULT CreateVideoTexture(UINT width, UINT height);
     HRESULT CreatePlaneTexture(UINT width, UINT height, DXGI_FORMAT format, ComPtr<ID3D12Resource>& texture);
     HRESULT CreateUploadBuffer(UINT64 size, ComPtr<ID3D12Resource>& buffer);
     PlaneUploadInfo GetPlaneUploadInfo(UINT width, UINT height);
@@ -91,21 +91,15 @@ private:
 
     UINT m_videoWidth{ 0 };
     UINT m_videoHeight{ 0 };
-    ComPtr<ID3D12Resource> m_yTexture;
-    ComPtr<ID3D12Resource> m_uTexture;
-    ComPtr<ID3D12Resource> m_vTexture;
 
-    ComPtr<ID3D12Resource> m_yUploadBuffer;
-    ComPtr<ID3D12Resource> m_uUploadBuffer;
-    ComPtr<ID3D12Resource> m_vUploadBuffer;
-
-    PlaneUploadInfo m_yUploadInfo;
-    PlaneUploadInfo m_uUploadInfo;
-    PlaneUploadInfo m_vUploadInfo;
-
-    UINT m_yRowPitch{ 0 };
-    UINT m_uRowPitch{ 0 };
-    UINT m_vRowPitch{ 0 };
+    // Texture
+    ComPtr<ID3D12Resource> m_videoTexture;
+    ComPtr<ID3D12Resource> m_videoUploadBuffer;
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT m_videoFootprint{};
+    UINT64 m_videoUploadBufferSize{ 0 };
+    D3D12_CPU_DESCRIPTOR_HANDLE m_videoTextureSrvHandle{};
+    D3D12_GPU_DESCRIPTOR_HANDLE m_videoTextureSrvGpuHandle{};
+    D3D12_RESOURCE_STATES m_videoTextureState{ D3D12_RESOURCE_STATE_COPY_DEST };
 
     ComPtr<ID3D12CommandAllocator> m_uploadCommandAllocator;
     ComPtr<ID3D12GraphicsCommandList> m_uploadCommandList;

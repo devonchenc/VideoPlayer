@@ -58,6 +58,7 @@ private:
     void PauseMasterClock();
     void ResumeMasterClock();
 
+    bool ConvertFrameToBGRA(AVFrame* srcFrame);
     static int InterruptCallback(void* opaque);
     static void LogFFmpegError(const char* operation, int error);
     size_t GetMaxVideoFrameQueueSize() const;
@@ -78,6 +79,10 @@ private:
     // Queues
     CBlockingQueue<PacketPtr> m_videoPacketQueue{ 128 };
     CBlockingQueue<VideoFrame> m_videoFrameQueue{ 30 };
+
+    // RGB frame
+    SwsContext* m_swsContext{ nullptr };
+    FramePtr m_rgbFrame{ nullptr };
 
     // Worker threads
     std::jthread m_demuxThread;

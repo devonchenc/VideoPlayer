@@ -325,8 +325,8 @@ HRESULT CD3D12Renderer::UploadVideoFrame(AVFrame* frame)
     if (!frame)
         return E_INVALIDARG;
 
-    if (frame->format != AV_PIX_FMT_YUV420P && frame->format != AV_PIX_FMT_YUVJ420P)
-        return E_NOTIMPL;
+    if (frame->format != AV_PIX_FMT_BGRA)
+        return E_INVALIDARG;
 
     const UINT videoWidth = frame->width;
     const UINT videoHeight = frame->height;
@@ -334,29 +334,32 @@ HRESULT CD3D12Renderer::UploadVideoFrame(AVFrame* frame)
     if (videoWidth == 0 || videoHeight == 0)
         return E_INVALIDARG;
 
-    const UINT chromaWidth = (videoWidth + 1) / 2;
-    const UINT chromaHeight = (videoHeight + 1) / 2;
+    if (!frame->data[0])
+        return E_INVALIDARG;
+
+    if (frame->linesize[0] < static_cast<int>(videoWidth * 4))
+        return E_INVALIDARG;
 
     // 1. Recreate resources if video format or size changes
-    if (m_videoWidth != videoWidth || m_videoHeight != videoHeight)
+    if (!m_videoTexture || m_videoWidth != videoWidth || m_videoHeight != videoHeight)
     {
         // Wait for previous GPU usage before releasing old textures
         const UINT backBufferIndex = m_swapChain->GetCurrentBackBufferIndex();
-        FrameContext& frame = m_frames[backBufferIndex];
+        FrameContext& frameContext = m_frames[backBufferIndex];
 
         HRESULT hr;
-        if (frame.fenceValue != 0)
+        if (frameContext.fenceValue != 0)
         {
-            hr = WaitForFence(frame.fenceValue);
+            hr = WaitForFence(frameContext.fenceValue);
             if (FAILED(hr))
                 return hr;
         }
 
-        hr = CreateVideoTextures(videoWidth, videoHeight);
+        hr = CreateVideoTexture(videoWidth, videoHeight);
         if (FAILED(hr))
             return hr;
 
-        CreateVideoSrvs();
+        CreateVideoSrv();
 
         m_videoWidth = videoWidth;
         m_videoHeight = videoHeight;
@@ -372,40 +375,28 @@ HRESULT CD3D12Renderer::UploadVideoFrame(AVFrame* frame)
     }
 
     // 3. Map upload buffers.
-    BYTE* yMapped = nullptr;
-    BYTE* uMapped = nullptr;
-    BYTE* vMapped = nullptr;
+    void* mappedData = nullptr;
 
     D3D12_RANGE readRange{ 0, 0 };
 
-    hr = m_yUploadBuffer->Map(0, &readRange, reinterpret_cast<void**>(&yMapped));
+    hr = m_videoUploadBuffer->Map(0, &readRange, reinterpret_cast<void**>(&mappedData));
     if (FAILED(hr))
         return hr;
 
-    hr = m_uUploadBuffer->Map(0, &readRange, reinterpret_cast<void**>(&uMapped));
-    if (FAILED(hr))
+    // Copy BGRA pixels row by row.
+    const UINT rowSize = videoWidth * 4;
+    uint8_t* dst = static_cast<uint8_t*>(mappedData);
+    const uint8_t* src = frame->data[0];
+
+    for (UINT y = 0; y < videoHeight; ++y)
     {
-        m_yUploadBuffer->Unmap(0, nullptr);
-        return hr;
+        memcpy(dst + y * m_videoFootprint.Footprint.RowPitch, src + y * frame->linesize[0], rowSize);
     }
 
-    hr = m_vUploadBuffer->Map(0, &readRange, reinterpret_cast<void**>(&vMapped));
-    if (FAILED(hr))
-    {
-        m_yUploadBuffer->Unmap(0, nullptr);
-        m_uUploadBuffer->Unmap(0, nullptr);
-        return hr;
-    }
+    // Unmap the upload buffer
+    const D3D12_RANGE writtenRange = { 0, static_cast<SIZE_T>(m_videoUploadBufferSize) };
 
-    // 4. Copy AVFrame data to upload buffers
-    CopyPlane(yMapped, m_yRowPitch, frame->data[0], frame->linesize[0], videoWidth, videoHeight);
-    CopyPlane(uMapped, m_uRowPitch, frame->data[1], frame->linesize[1], chromaWidth, chromaHeight);
-    CopyPlane(vMapped, m_vRowPitch, frame->data[2], frame->linesize[2], chromaWidth, chromaHeight);
-
-    // 5. Unmap upload buffers
-    m_yUploadBuffer->Unmap(0, nullptr);
-    m_uUploadBuffer->Unmap(0, nullptr);
-    m_vUploadBuffer->Unmap(0, nullptr);
+    m_videoUploadBuffer->Unmap(0, &writtenRange);
 
     // 6. Copy upload buffers to GPU textures
     return CopyVideoPlanesToGpu();
@@ -416,7 +407,7 @@ HRESULT CD3D12Renderer::Render()
     if (!m_swapChain || !m_pipelineState)
         return E_UNEXPECTED;
 
-    if (!m_yTexture || !m_uTexture || !m_vTexture)
+    if (!m_videoTexture)
         return S_FALSE;
 
     // 1. Get current back buffer.
@@ -601,44 +592,55 @@ void CD3D12Renderer::Clear()
     }
 }
 
-HRESULT CD3D12Renderer::CreateVideoTextures(UINT width, UINT height)
+HRESULT CD3D12Renderer::CreateVideoTexture(UINT width, UINT height)
 {
-    const UINT chromaWidth = (width + 1) / 2;
-    const UINT chromaHeight = (height + 1) / 2;
+    if (width == 0 || height == 0)
+        return E_INVALIDARG;
 
-    HRESULT hr = CreatePlaneTexture(width, height, DXGI_FORMAT_R8_UNORM, m_yTexture);
+    m_videoTexture.Reset();
+    m_videoUploadBuffer.Reset();
+
+    D3D12_RESOURCE_DESC textureDesc{};
+    textureDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    textureDesc.Width = width;
+    textureDesc.Height = height;
+    textureDesc.DepthOrArraySize = 1;
+    textureDesc.MipLevels = 1;
+    textureDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    textureDesc.SampleDesc.Count = 1;
+    textureDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    textureDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+    D3D12_HEAP_PROPERTIES defaultHeap{};
+    defaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+    HRESULT hr = m_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &textureDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&m_videoTexture));
     if (FAILED(hr))
         return hr;
 
-    hr = CreatePlaneTexture(chromaWidth, chromaHeight, DXGI_FORMAT_R8_UNORM, m_uTexture);
+    // Calculate the required upload buffer size and layout
+    m_device->GetCopyableFootprints(&textureDesc, 0, 1, 0, &m_videoFootprint, nullptr, nullptr, &m_videoUploadBufferSize);
+
+    D3D12_HEAP_PROPERTIES uploadHeap{};
+    uploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
+
+    D3D12_RESOURCE_DESC bufferDesc{};
+    bufferDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    bufferDesc.Width = m_videoUploadBufferSize;
+    bufferDesc.Height = 1;
+    bufferDesc.DepthOrArraySize = 1;
+    bufferDesc.MipLevels = 1;
+    bufferDesc.SampleDesc.Count = 1;
+    bufferDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    hr = m_device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &bufferDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&m_videoUploadBuffer));
     if (FAILED(hr))
+    {
+        m_videoTexture.Reset();
         return hr;
+    }
 
-    hr = CreatePlaneTexture(chromaWidth, chromaHeight, DXGI_FORMAT_R8_UNORM, m_vTexture);
-    if (FAILED(hr))
-        return hr;
-
-    m_yUploadInfo = GetPlaneUploadInfo(width, height);
-    m_uUploadInfo = GetPlaneUploadInfo(chromaWidth, chromaHeight);
-    m_vUploadInfo = GetPlaneUploadInfo(chromaWidth, chromaHeight);
-    
-    m_yRowPitch = m_yUploadInfo.footprint.Footprint.RowPitch;
-    m_uRowPitch = m_uUploadInfo.footprint.Footprint.RowPitch;
-    m_vRowPitch = m_vUploadInfo.footprint.Footprint.RowPitch;
-
-    hr = CreateUploadBuffer(m_yUploadInfo.totalBytes, m_yUploadBuffer);
-    if (FAILED(hr))
-        return hr;
-
-    hr = CreateUploadBuffer(m_uUploadInfo.totalBytes, m_uUploadBuffer);
-    if (FAILED(hr))
-        return hr;
-
-    hr = CreateUploadBuffer(m_vUploadInfo.totalBytes, m_vUploadBuffer);
-    if (FAILED(hr))
-        return hr;
-
-    m_videoTexturesInShaderState = false;
+    m_videoTextureState = D3D12_RESOURCE_STATE_COPY_DEST;
 
     return S_OK;
 }
@@ -709,55 +711,43 @@ HRESULT CD3D12Renderer::CopyVideoPlanesToGpu()
     if (FAILED(hr))
         return hr;
 
-    // Transition textures to COPY_DEST before updating
-    if (m_videoTexturesInShaderState)
+    // Transition video texture to COPY_DEST
+    D3D12_RESOURCE_BARRIER barrier{};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier.Transition.pResource = m_videoTexture.Get();
+    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+
+    // The texture is initially created in COPY_DEST state.
+    // Track its actual state to avoid an invalid transition.
+    if (m_videoTextureState != D3D12_RESOURCE_STATE_COPY_DEST)
     {
-        D3D12_RESOURCE_BARRIER barriers[3]{};
-
-        ID3D12Resource* textures[] =
-        {
-            m_yTexture.Get(),
-            m_uTexture.Get(),
-            m_vTexture.Get()
-        };
-
-        for (UINT i = 0; i < 3; ++i)
-        {
-            barriers[i].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            barriers[i].Transition.pResource = textures[i];
-            barriers[i].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            barriers[i].Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-            barriers[i].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
-        }
-
-        m_uploadCommandList->ResourceBarrier(3, barriers);
+        m_uploadCommandList->ResourceBarrier(1, &barrier);
     }
 
-    // Copy Y, U and V planes
-    CopyPlaneToTexture(m_uploadCommandList.Get(), m_yUploadBuffer.Get(), m_yTexture.Get(), m_yUploadInfo.footprint);
-    CopyPlaneToTexture(m_uploadCommandList.Get(), m_uUploadBuffer.Get(), m_uTexture.Get(), m_uUploadInfo.footprint);
-    CopyPlaneToTexture(m_uploadCommandList.Get(), m_vUploadBuffer.Get(), m_vTexture.Get(), m_vUploadInfo.footprint);
+    // Source: Upload Buffer
+    D3D12_TEXTURE_COPY_LOCATION srcLocation{};
+    srcLocation.pResource = m_videoUploadBuffer.Get();
+    srcLocation.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    srcLocation.PlacedFootprint = m_videoFootprint;
 
-    // Transition textures to PIXEL_SHADER_RESOURCE
-    D3D12_RESOURCE_BARRIER barriers[3]{};
+    // Destination: Video Texture
+    D3D12_TEXTURE_COPY_LOCATION dstLocation{};
+    dstLocation.pResource = m_videoTexture.Get();
+    dstLocation.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    dstLocation.SubresourceIndex = 0;
 
-    ID3D12Resource* textures[] =
-    {
-        m_yTexture.Get(),
-        m_uTexture.Get(),
-        m_vTexture.Get()
-    };
+    // Copy Upload Buffer to Texture2D
+    m_uploadCommandList->CopyTextureRegion(&dstLocation, 0, 0, 0, &srcLocation, nullptr);
 
-    for (UINT i = 0; i < 3; ++i)
-    {
-        barriers[i].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        barriers[i].Transition.pResource = textures[i];
-        barriers[i].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-        barriers[i].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-        barriers[i].Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-    }
+    // Transition video texture to PIXEL_SHADER_RESOURCE
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
 
-    m_uploadCommandList->ResourceBarrier(3, barriers);
+    m_uploadCommandList->ResourceBarrier(1, &barrier);
+
+    m_videoTextureState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
 
     hr = m_uploadCommandList->Close();
     if (FAILED(hr))
@@ -781,7 +771,7 @@ HRESULT CD3D12Renderer::CreateVideoSrvHeap()
 {
     D3D12_DESCRIPTOR_HEAP_DESC desc{};
     desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    desc.NumDescriptors = 3;
+    desc.NumDescriptors = 1;
     desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 
     HRESULT hr = m_device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&m_videoSrvHeap));
@@ -790,26 +780,25 @@ HRESULT CD3D12Renderer::CreateVideoSrvHeap()
 
     m_srvDescriptorSize = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
+    // Get CPU descriptor handle
+    m_videoTextureSrvHandle = m_videoSrvHeap->GetCPUDescriptorHandleForHeapStart();
+
+    // Get GPU descriptor handle
+    m_videoTextureSrvGpuHandle = m_videoSrvHeap->GetGPUDescriptorHandleForHeapStart();
+
     return S_OK;
 }
 
-void CD3D12Renderer::CreateVideoSrvs()
+void CD3D12Renderer::CreateVideoSrv()
 {
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
     srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     srvDesc.Texture2D.MostDetailedMip = 0;
     srvDesc.Texture2D.MipLevels = 1;
-    srvDesc.Format = DXGI_FORMAT_R8_UNORM;
+    srvDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
 
-    D3D12_CPU_DESCRIPTOR_HANDLE handle = m_videoSrvHeap->GetCPUDescriptorHandleForHeapStart();
-    m_device->CreateShaderResourceView(m_yTexture.Get(), &srvDesc, handle);
-
-    handle.ptr += m_srvDescriptorSize;
-    m_device->CreateShaderResourceView(m_uTexture.Get(), &srvDesc, handle);
-
-    handle.ptr += m_srvDescriptorSize;
-    m_device->CreateShaderResourceView(m_vTexture.Get(), &srvDesc, handle);
+    m_device->CreateShaderResourceView(m_videoTexture.Get(), &srvDesc, m_videoTextureSrvHandle);
 }
 
 HRESULT CD3D12Renderer::CreateRootSignature()
