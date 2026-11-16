@@ -93,8 +93,10 @@ void CPlayController::Pause()
     {
         m_videoFrameQueue.SetDropOldestWhenFull(true);
     }
-
-    PauseMasterClock();
+    else
+    {
+        PauseMasterClock();
+    }
 }
 
 void CPlayController::Resume()
@@ -104,8 +106,10 @@ void CPlayController::Resume()
         m_videoFrameQueue.Clear();
         m_videoFrameQueue.SetDropOldestWhenFull(false);
     }
-
-    ResumeMasterClock();
+    else
+    {
+        ResumeMasterClock();
+    }
 
     NotifyDataReady();
 }
