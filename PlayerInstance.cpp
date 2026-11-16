@@ -115,8 +115,6 @@ HRESULT CPlayerInstance::PlayStop()
     m_commandQueue.push(PlayerCommand{ PlayerCommandType::Stop });
     SetEvent(m_commandEvent);
 
-    m_controller->Stop();
-
     return S_OK;
 }
 

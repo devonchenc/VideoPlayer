@@ -5,7 +5,7 @@
 
 HRESULT InitializePlayer()
 {
-    return CPlayerGlobalContext::GetInstance().Initialize();;
+    return CPlayerGlobalContext::GetInstance().Initialize();
 }
 
 HRESULT CreatePlayerInstance(HWND playbackWndHandle, HWND callbackWndHandle, long* playerInstance)

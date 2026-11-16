@@ -9,12 +9,6 @@ namespace
 {
     constexpr size_t DEFAULT_VIDEO_FRAME_QUEUE_SIZE = 50;
     constexpr double DEFAULT_VIDEO_FRAME_RATE = 1.0 / 30.0;
-    constexpr int AUDIO_SAMPLE_RATE = 48000;
-    constexpr int AUDIO_CHANNELS = 2;
-    constexpr int BYTES_PER_SAMPLE = 2;
-    constexpr int BYTES_PER_AUDIO_FRAME = AUDIO_CHANNELS * BYTES_PER_SAMPLE;
-    constexpr double EARLY_FRAME_THRESHOLD_SECONDS = 0.003;
-    constexpr double LATE_FRAME_THRESHOLD_SECONDS = 0.500;
 
     bool IsValidTimestamp(double value)
     {

@@ -432,7 +432,7 @@ HRESULT CD3D12Renderer::Render()
             return hr;
     }
 
-    // 3. Reset command allocator and command list.
+    // 3. Reset command allocator and command list
     hr = frame.commandAllocator->Reset();
     if (FAILED(hr))
         return hr;
@@ -987,7 +987,7 @@ HRESULT CD3D12Renderer::CompileShader(const std::wstring& filename, const char* 
 
 UINT64 CD3D12Renderer::SignalGpu()
 {
-    const UINT64 fenceValue = m_nextFenceValue++;
+    const UINT64 fenceValue = ++m_nextFenceValue;
 
     HRESULT hr = m_commandQueue->Signal(m_fence.Get(), fenceValue);
     if (FAILED(hr))
