@@ -5,7 +5,6 @@
 #include <mutex>
 #include <queue>
 #include <thread>
-#include "Utility.h"
 #include "D3D12Renderer.h"
 #include "PlaybackEngine.h"
 
@@ -84,8 +83,6 @@ private:
     std::unique_ptr<CPlaybackEngine> m_playbackEngine;
 
     std::optional<VideoFrame> m_pendingVideoFrame;
-    std::atomic<uint64_t> m_renderedFrameCount{ 0 };
-    std::uint64_t m_lastRenderedFrameCount{ 0 };
 
     HANDLE m_commandEvent{ nullptr };
     HANDLE m_stopEvent{ nullptr };

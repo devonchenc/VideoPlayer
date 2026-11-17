@@ -2,34 +2,9 @@
 
 #include <D3DCompiler.h>
 #include "PlayerGlobalContext.h"
+#include "Utility.h"
 
 #pragma comment(lib, "D3DCompiler.lib")
-
-namespace
-{
-    void CopyPlane(BYTE* dst, UINT dstRowPitch, const BYTE* src, int srcLinesize, UINT rowSize, UINT height)
-    {
-        for (UINT y = 0; y < height; ++y)
-        {
-            memcpy(dst + static_cast<size_t>(y) * dstRowPitch, src + static_cast<ptrdiff_t>(y) * srcLinesize, rowSize);
-        }
-    }
-
-    void CopyPlaneToTexture(ID3D12GraphicsCommandList* commandList, ID3D12Resource* uploadBuffer, ID3D12Resource* texture, const D3D12_PLACED_SUBRESOURCE_FOOTPRINT& footprint)
-    {
-        D3D12_TEXTURE_COPY_LOCATION src{};
-        src.pResource = uploadBuffer;
-        src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-        src.PlacedFootprint = footprint;
-
-        D3D12_TEXTURE_COPY_LOCATION dst{};
-        dst.pResource = texture;
-        dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-        dst.SubresourceIndex = 0;
-
-        commandList->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
-    }
-}
 
 HRESULT CD3D12Renderer::Initialize(HWND hwnd)
 {
@@ -633,7 +608,7 @@ HRESULT CD3D12Renderer::CreateVideoTexture(UINT width, UINT height)
         return hr;
     }
 
-    m_videoTextureState = D3D12_RESOURCE_STATE_COPY_DEST;
+    m_videoTexturesInShaderState = false;
 
     return S_OK;
 }
@@ -704,7 +679,7 @@ HRESULT CD3D12Renderer::CopyVideoPlanesToGpu()
     if (FAILED(hr))
         return hr;
 
-    // Transition video texture to COPY_DEST
+    // Transition video texture from PIXEL_SHADER_RESOURCE to COPY_DEST
     D3D12_RESOURCE_BARRIER barrier{};
     barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     barrier.Transition.pResource = m_videoTexture.Get();
@@ -712,9 +687,7 @@ HRESULT CD3D12Renderer::CopyVideoPlanesToGpu()
     barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
 
-    // The texture is initially created in COPY_DEST state.
-    // Track its actual state to avoid an invalid transition.
-    if (m_videoTextureState != D3D12_RESOURCE_STATE_COPY_DEST)
+    if (m_videoTexturesInShaderState)
     {
         m_uploadCommandList->ResourceBarrier(1, &barrier);
     }
@@ -739,8 +712,6 @@ HRESULT CD3D12Renderer::CopyVideoPlanesToGpu()
     barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
 
     m_uploadCommandList->ResourceBarrier(1, &barrier);
-
-    m_videoTextureState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
 
     hr = m_uploadCommandList->Close();
     if (FAILED(hr))
@@ -771,13 +742,8 @@ HRESULT CD3D12Renderer::CreateVideoSrvHeap()
     if (FAILED(hr))
         return hr;
 
-    m_srvDescriptorSize = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-
     // Get CPU descriptor handle
     m_videoTextureSrvHandle = m_videoSrvHeap->GetCPUDescriptorHandleForHeapStart();
-
-    // Get GPU descriptor handle
-    m_videoTextureSrvGpuHandle = m_videoSrvHeap->GetGPUDescriptorHandleForHeapStart();
 
     return S_OK;
 }

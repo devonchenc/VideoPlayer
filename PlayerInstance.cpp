@@ -1,9 +1,10 @@
 #include "PlayerInstance.h"
+#include "Utility.h"
 
 namespace
 {
     constexpr double EARLY_FRAME_THRESHOLD_SECONDS = 0.003;
-    constexpr double LATE_FRAME_THRESHOLD_SECONDS = 0.500;
+    constexpr double LATE_FRAME_THRESHOLD_SECONDS = 0.5;
 }
 
 CPlayerInstance::CPlayerInstance()

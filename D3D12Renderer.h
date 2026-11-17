@@ -3,17 +3,17 @@
 #include <array>
 #include <cstdint>
 #include <mutex>
-
 #include <Windows.h>
 #include <wrl/client.h>
 #include <dxgi1_6.h>
 #include <d3d12.h>
-#include "Utility.h"
 
 #pragma comment(lib, "d3d12.lib")
 #pragma comment(lib, "dxgi.lib")
 
 using Microsoft::WRL::ComPtr;
+
+struct AVFrame;
 
 struct FrameContext
 {
@@ -98,8 +98,6 @@ private:
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT m_videoFootprint{};
     UINT64 m_videoUploadBufferSize{ 0 };
     D3D12_CPU_DESCRIPTOR_HANDLE m_videoTextureSrvHandle{};
-    D3D12_GPU_DESCRIPTOR_HANDLE m_videoTextureSrvGpuHandle{};
-    D3D12_RESOURCE_STATES m_videoTextureState{ D3D12_RESOURCE_STATE_COPY_DEST };
 
     ComPtr<ID3D12CommandAllocator> m_uploadCommandAllocator;
     ComPtr<ID3D12GraphicsCommandList> m_uploadCommandList;
@@ -108,7 +106,6 @@ private:
 
     // Video Texture SRVs
     ComPtr<ID3D12DescriptorHeap> m_videoSrvHeap;
-    UINT m_srvDescriptorSize{ 0 };
 
     ComPtr<ID3D12RootSignature> m_rootSignature;
     ComPtr<ID3D12PipelineState> m_pipelineState;
