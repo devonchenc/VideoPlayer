@@ -25,6 +25,10 @@ bool CPlaybackEngine::Initialize()
 {
     Stop();
 
+    m_decodedFrame.reset(av_frame_alloc());
+    if (!m_decodedFrame)
+        return false;
+
     m_videoPacketQueue.Reset();
     m_videoFrameQueue.Reset();
 
@@ -326,11 +330,9 @@ bool CPlaybackEngine::ReceiveVideoFrames(std::stop_token stopToken)
 {
     while (true)
     {
-        FramePtr frame(av_frame_alloc());
-        if (!frame)
-            return false;
+        av_frame_unref(m_decodedFrame.get());
 
-        const int result = avcodec_receive_frame(m_videoCodecContext.get(), frame.get());
+        const int result = avcodec_receive_frame(m_videoCodecContext.get(), m_decodedFrame.get());
         if (result == AVERROR(EAGAIN) || result == AVERROR_EOF)
             return true;
 
@@ -344,11 +346,11 @@ bool CPlaybackEngine::ReceiveVideoFrames(std::stop_token stopToken)
         if (!rgbFrame)
             return false;
 
-        if (!ConvertFrameToBGRA(frame.get(), rgbFrame.get()))
+        if (!ConvertFrameToBGRA(m_decodedFrame.get(), rgbFrame.get()))
             return false;
 
-        double pts = NormalizeTimestamp(frame->best_effort_timestamp, m_videoAVStream->time_base);
-        AVRational frameRate = av_guess_frame_rate(m_formatContext.get(), m_videoAVStream, frame.get());
+        double pts = NormalizeTimestamp(m_decodedFrame->best_effort_timestamp, m_videoAVStream->time_base);
+        AVRational frameRate = av_guess_frame_rate(m_formatContext.get(), m_videoAVStream, m_decodedFrame.get());
 
         double frameDuration = DEFAULT_VIDEO_FRAME_RATE;
         if (frameRate.num > 0 && frameRate.den > 0)
@@ -363,8 +365,6 @@ bool CPlaybackEngine::ReceiveVideoFrames(std::stop_token stopToken)
         VideoFrame output;
         output.frame = std::move(rgbFrame);
         output.pts = pts;
-
-        ++m_decodedFrameCount;
 
         if (!m_videoFrameQueue.Push(std::move(output), stopToken))
             return false;
@@ -511,29 +511,4 @@ bool CPlaybackEngine::ConvertFrameToBGRA(AVFrame* srcFrame, AVFrame* rgbFrame)
     }
 
     return true;
-}
-
-void CPlaybackEngine::PrintStatistics()
-{
-    const std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
-
-    if (m_lastStatsTime.time_since_epoch().count() == 0)
-    {
-        m_lastStatsTime = now;
-        return;
-    }
-
-    const double elapsed = std::chrono::duration<double>(now - m_lastStatsTime).count();
-
-    if (elapsed < 1.0)
-        return;
-
-    const double decodedFps = (m_decodedFrameCount - m_lastDecodedFrameCount) / elapsed;
-
-    std::cout << "\n========== Player Statistics ==========\n"
-        << "Decoded FPS:  " << decodedFps << '\n'
-        << "Video Queue Size:   " << m_videoFrameQueue.Size() << std::endl;
-
-    m_lastDecodedFrameCount = m_decodedFrameCount;
-    m_lastStatsTime = now;
 }

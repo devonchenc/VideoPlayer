@@ -62,7 +62,6 @@ private:
     static int InterruptCallback(void* opaque);
     static void LogFFmpegError(const char* operation, int error);
     size_t GetMaxVideoFrameQueueSize() const;
-    void PrintStatistics();
 
 private:
     // FFmpeg objects
@@ -70,6 +69,7 @@ private:
     CodecPtr m_videoCodecContext;
 
     AVStream* m_videoAVStream{ nullptr };
+    FramePtr m_decodedFrame;
 
     int m_videoStreamIndex{ -1 };
     double m_timestampOrigin{ 0.0 };
@@ -100,11 +100,6 @@ private:
 
     bool m_clockPaused{ false };
     double m_pausedClock{ 0.0 };
-
-    // FPS stats
-    std::chrono::steady_clock::time_point m_lastStatsTime{};
-    std::atomic<uint64_t> m_decodedFrameCount{ 0 };
-    std::uint64_t m_lastDecodedFrameCount{ 0 };
 
     PlayerConfig m_config;
 
