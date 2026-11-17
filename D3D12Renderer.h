@@ -21,14 +21,6 @@ struct FrameContext
     UINT64 fenceValue{ 0 };
 };
 
-struct PlaneUploadInfo
-{
-    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
-    UINT numRows{ 0 };
-    UINT64 rowSize{ 0 };
-    UINT64 totalBytes{ 0 };
-};
-
 namespace
 {
     constexpr UINT FRAME_COUNT = 2;
@@ -57,9 +49,7 @@ private:
     HRESULT CreateVideoSrvHeap();
     void CreateVideoSrv();
     HRESULT CreateVideoTexture(UINT width, UINT height);
-    HRESULT CreatePlaneTexture(UINT width, UINT height, DXGI_FORMAT format, ComPtr<ID3D12Resource>& texture);
     HRESULT CreateUploadBuffer(UINT64 size, ComPtr<ID3D12Resource>& buffer);
-    PlaneUploadInfo GetPlaneUploadInfo(UINT width, UINT height);
     HRESULT CopyVideoPlanesToGpu();
     HRESULT WaitForFence(UINT64 fenceValue);
     HRESULT WaitForGpu();

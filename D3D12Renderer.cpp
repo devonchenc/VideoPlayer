@@ -613,27 +613,6 @@ HRESULT CD3D12Renderer::CreateVideoTexture(UINT width, UINT height)
     return S_OK;
 }
 
-HRESULT CD3D12Renderer::CreatePlaneTexture(UINT width, UINT height, DXGI_FORMAT format, ComPtr<ID3D12Resource>& texture)
-{
-    D3D12_HEAP_PROPERTIES heapProperties{};
-    heapProperties.Type = D3D12_HEAP_TYPE_DEFAULT;
-
-    D3D12_RESOURCE_DESC desc{};
-    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-    desc.Alignment = 0;
-    desc.Width = width;
-    desc.Height = height;
-    desc.DepthOrArraySize = 1;
-    desc.MipLevels = 1;
-    desc.Format = format;
-    desc.SampleDesc.Count = 1;
-    desc.SampleDesc.Quality = 0;
-    desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-    desc.Flags = D3D12_RESOURCE_FLAG_NONE;
-
-    return m_device->CreateCommittedResource(&heapProperties, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&texture));
-}
-
 HRESULT CD3D12Renderer::CreateUploadBuffer(UINT64 size, ComPtr<ID3D12Resource>& buffer)
 {
     D3D12_HEAP_PROPERTIES heapProperties{};
@@ -649,24 +628,6 @@ HRESULT CD3D12Renderer::CreateUploadBuffer(UINT64 size, ComPtr<ID3D12Resource>& 
     desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
 
     return m_device->CreateCommittedResource(&heapProperties, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&buffer));
-}
-
-PlaneUploadInfo CD3D12Renderer::GetPlaneUploadInfo(UINT width, UINT height)
-{
-    D3D12_RESOURCE_DESC desc{};
-    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-    desc.Width = width;
-    desc.Height = height;
-    desc.DepthOrArraySize = 1;
-    desc.MipLevels = 1;
-    desc.Format = DXGI_FORMAT_R8_UNORM;
-    desc.SampleDesc.Count = 1;
-    desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-
-    PlaneUploadInfo info{};
-    m_device->GetCopyableFootprints(&desc, 0, 1, 0, &info.footprint, &info.numRows, &info.rowSize, &info.totalBytes);
-
-    return info;
 }
 
 HRESULT CD3D12Renderer::CopyVideoPlanesToGpu()
@@ -797,13 +758,10 @@ HRESULT CD3D12Renderer::CreateRootSignature()
 
     // 4. Define Root Signature
     D3D12_ROOT_SIGNATURE_DESC rootSignatureDesc{};
-
     rootSignatureDesc.NumParameters = 1;
     rootSignatureDesc.pParameters = &rootParameter;
-
     rootSignatureDesc.NumStaticSamplers = 1;
     rootSignatureDesc.pStaticSamplers = &sampler;
-
     rootSignatureDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
     // 5. Serialize Root Signature
