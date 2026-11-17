@@ -18,16 +18,16 @@ struct PlayerConfig
     std::chrono::milliseconds videoBufferDurationMs{ 1000 };
 };
 
-class CPlayController
+class CPlaybackEngine
 {
 public:
-    CPlayController() = default;
-    ~CPlayController();
+    CPlaybackEngine() = default;
+    ~CPlaybackEngine();
 
-    CPlayController(const CPlayController&) = delete;
-    CPlayController(CPlayController&&) = delete;
-    CPlayController& operator=(const CPlayController&) = delete;
-    CPlayController& operator=(CPlayController&&) = delete;
+    CPlaybackEngine(const CPlaybackEngine&) = delete;
+    CPlaybackEngine(CPlaybackEngine&&) = delete;
+    CPlaybackEngine& operator=(const CPlaybackEngine&) = delete;
+    CPlaybackEngine& operator=(CPlaybackEngine&&) = delete;
 
 public:
     bool Initialize();

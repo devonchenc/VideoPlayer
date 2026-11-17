@@ -7,7 +7,7 @@
 #include <thread>
 #include "Utility.h"
 #include "D3D12Renderer.h"
-#include "PlayController.h"
+#include "PlaybackEngine.h"
 
 enum class PlayerCommandType
 {
@@ -81,7 +81,7 @@ private:
     RECT m_windowPos{};
     bool m_initialized{ false };
     std::unique_ptr<CD3D12Renderer> m_renderer;
-    std::unique_ptr<CPlayController> m_controller;
+    std::unique_ptr<CPlaybackEngine> m_playbackEngine;
 
     std::optional<VideoFrame> m_pendingVideoFrame;
     std::atomic<uint64_t> m_renderedFrameCount{ 0 };

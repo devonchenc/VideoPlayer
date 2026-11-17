@@ -192,7 +192,7 @@
     <ClInclude Include="framework.h" />
     <ClInclude Include="Interface.h" />
     <ClInclude Include="MainFrm.h" />
-    <ClInclude Include="PlayController.h" />
+    <ClInclude Include="PlaybackEngine.h" />
     <ClInclude Include="PlayerGlobalContext.h" />
     <ClInclude Include="PlayerManager.h" />
     <ClInclude Include="PlayerWindowProc.h" />
@@ -209,7 +209,7 @@
     <ClCompile Include="D3D12Renderer.cpp" />
     <ClCompile Include="Interface.cpp" />
     <ClCompile Include="MainFrm.cpp" />
-    <ClCompile Include="PlayController.cpp" />
+    <ClCompile Include="PlaybackEngine.cpp" />
     <ClCompile Include="PlayerGlobalContext.cpp" />
     <ClCompile Include="PlayerWindowProc.cpp" />
     <ClCompile Include="PlayerInstance.cpp" />

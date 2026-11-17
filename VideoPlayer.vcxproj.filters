@@ -63,7 +63,7 @@
     <ClInclude Include="BlockingQueue.h">
       <Filter>Player</Filter>
     </ClInclude>
-    <ClInclude Include="PlayController.h">
+    <ClInclude Include="PlaybackEngine.h">
       <Filter>Player</Filter>
     </ClInclude>
     <ClInclude Include="Utility.h">
@@ -101,7 +101,7 @@
     <ClCompile Include="D3D12Renderer.cpp">
       <Filter>Player</Filter>
     </ClCompile>
-    <ClCompile Include="PlayController.cpp">
+    <ClCompile Include="PlaybackEngine.cpp">
       <Filter>Player</Filter>
     </ClCompile>
   </ItemGroup>

@@ -374,16 +374,14 @@ HRESULT CD3D12Renderer::UploadVideoFrame(AVFrame* frame)
             return hr;
     }
 
-    // 3. Map upload buffers.
+    // 3. Map upload buffers
     void* mappedData = nullptr;
-
     D3D12_RANGE readRange{ 0, 0 };
-
     hr = m_videoUploadBuffer->Map(0, &readRange, reinterpret_cast<void**>(&mappedData));
     if (FAILED(hr))
         return hr;
 
-    // Copy BGRA pixels row by row.
+    // 4. Copy BGRA pixels row by row
     const UINT rowSize = videoWidth * 4;
     uint8_t* dst = static_cast<uint8_t*>(mappedData);
     const uint8_t* src = frame->data[0];
@@ -393,9 +391,8 @@ HRESULT CD3D12Renderer::UploadVideoFrame(AVFrame* frame)
         memcpy(dst + y * m_videoFootprint.Footprint.RowPitch, src + y * frame->linesize[0], rowSize);
     }
 
-    // Unmap the upload buffer
+    // 5. Unmap the upload buffer
     const D3D12_RANGE writtenRange = { 0, static_cast<SIZE_T>(m_videoUploadBufferSize) };
-
     m_videoUploadBuffer->Unmap(0, &writtenRange);
 
     // 6. Copy upload buffers to GPU textures
@@ -410,7 +407,7 @@ HRESULT CD3D12Renderer::Render()
     if (!m_videoTexture)
         return S_FALSE;
 
-    // 1. Get current back buffer.
+    // 1. Get current back buffer
     const UINT backBufferIndex = m_swapChain->GetCurrentBackBufferIndex();
     FrameContext& frame = m_frames[backBufferIndex];
 
@@ -446,9 +443,7 @@ HRESULT CD3D12Renderer::Render()
 
     // 5. Set render target
     D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
-
     rtvHandle.ptr += static_cast<SIZE_T>(backBufferIndex) * m_rtvDescriptorSize;
-
     m_renderCommandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
 
     // 6. Set viewport and scissor rect
@@ -475,12 +470,10 @@ HRESULT CD3D12Renderer::Render()
 
     // 8. Bind pipeline and root signature
     m_renderCommandList->SetGraphicsRootSignature(m_rootSignature.Get());
-
     m_renderCommandList->SetPipelineState(m_pipelineState.Get());
 
     // 9. Bind video SRV descriptor heap
     ID3D12DescriptorHeap* descriptorHeaps[] = { m_videoSrvHeap.Get() };
-
     m_renderCommandList->SetDescriptorHeaps(1, descriptorHeaps);
 
     // 10. Bind SRV descriptor table

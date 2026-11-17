@@ -9,7 +9,7 @@ namespace
 CPlayerInstance::CPlayerInstance()
 {
     m_renderer = std::make_unique<CD3D12Renderer>();
-    m_controller = std::make_unique< CPlayController>();
+    m_playbackEngine = std::make_unique<CPlaybackEngine>();
 }
 
 CPlayerInstance::~CPlayerInstance()
@@ -42,7 +42,7 @@ HRESULT CPlayerInstance::Initialize(HWND parentWnd)
     if (FAILED(hr))
         return hr;
 
-    if (!m_controller->Initialize())
+    if (!m_playbackEngine->Initialize())
         return E_FAIL;
 
     m_commandEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
@@ -97,8 +97,10 @@ HRESULT CPlayerInstance::GetWindowPos(RECT* windowPos)
 
 HRESULT CPlayerInstance::PlayLive(long cameraNumber, long playSpeed)
 {
-    const std::string url = "qable-sample-720p-10s.mp4";
-    m_controller->PlayLive(url);
+    //const std::string url = "qable-sample-720p-10s.mp4";
+    //m_playbackEngine->PlayRecorded(url);
+    const std::string url = "rtsp://127.0.0.1:8554/test";
+    m_playbackEngine->PlayLive(url);
 
     std::lock_guard lock(m_commandMutex);
 
@@ -227,7 +229,7 @@ void CPlayerInstance::ProcessPendingCommands(std::stop_token stopToken)
             if (m_playbackState == PlaybackState::Stopped)
                 break;
 
-            m_controller->Stop();
+            m_playbackEngine->Stop();
             m_playbackState = PlaybackState::Stopped;
             break;
         }
@@ -239,7 +241,7 @@ void CPlayerInstance::ProcessPendingCommands(std::stop_token stopToken)
             if (m_playbackState.exchange(PlaybackState::Paused) == PlaybackState::Paused)
                 break;
 
-            m_controller->Pause();
+            m_playbackEngine->Pause();
             break;
         }
         case PlayerCommandType::Resume:
@@ -247,7 +249,7 @@ void CPlayerInstance::ProcessPendingCommands(std::stop_token stopToken)
             if (m_playbackState != PlaybackState::Paused)
                 break;
 
-            m_controller->Resume();
+            m_playbackEngine->Resume();
             m_playbackState = PlaybackState::Playing;
             break;
         }
@@ -283,13 +285,13 @@ void CPlayerInstance::ProcessVideoFrames(std::stop_token stopToken)
         if (!m_pendingVideoFrame)
         {
             VideoFrame frame;
-            if (!m_controller->TryGetVideoFrame(frame))
+            if (!m_playbackEngine->TryGetVideoFrame(frame))
                 return;
 
             m_pendingVideoFrame = std::move(frame);
         }
 
-        const double masterClock = m_controller->GetMasterClock();
+        const double masterClock = m_playbackEngine->GetMasterClock();
         const double difference = m_pendingVideoFrame->pts - masterClock;
 
         // Frame is too early
@@ -304,7 +306,6 @@ void CPlayerInstance::ProcessVideoFrames(std::stop_token stopToken)
             continue;
         }
 
-        // Render the frame
         const HRESULT hr = m_renderer->UploadVideoFrame(m_pendingVideoFrame->frame.get());
         if (FAILED(hr))
         {
@@ -315,7 +316,6 @@ void CPlayerInstance::ProcessVideoFrames(std::stop_token stopToken)
             return;
         }
 
-        // 4. Render
         m_renderer->Render();
 
         // Frame has been submitted for rendering
@@ -334,7 +334,7 @@ DWORD CPlayerInstance::CalculateNextWakeUpTimeout() const
     if (!m_pendingVideoFrame)
         return INFINITE;
 
-    const double difference = m_pendingVideoFrame->pts - m_controller->GetMasterClock();
+    const double difference = m_pendingVideoFrame->pts - m_playbackEngine->GetMasterClock();
     const double waitSeconds = difference - EARLY_FRAME_THRESHOLD_SECONDS;
     if (waitSeconds <= 0.0)
         return 0;
@@ -352,7 +352,6 @@ RenderWaitResult CPlayerInstance::WaitForRenderEvents(DWORD timeoutMs, bool wait
     else
     {
         LARGE_INTEGER dueTime{};
-
         dueTime.QuadPart = -static_cast<LONGLONG>(timeoutMs) * 10'000;
 
         if (!SetWaitableTimer(m_renderTimer, &dueTime, 0, nullptr, nullptr, FALSE))
@@ -371,7 +370,7 @@ RenderWaitResult CPlayerInstance::WaitForRenderEvents(DWORD timeoutMs, bool wait
     // Wait for a new video frame only when there is no pending frame
     if (!m_pendingVideoFrame)
     {
-        handles[count++] = m_controller->GetVideoFrameEvent();
+        handles[count++] = m_playbackEngine->GetVideoFrameEvent();
     }
     // Wait for DXGI to accept another frame
     if (waitForFrameLatency)
