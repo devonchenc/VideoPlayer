@@ -45,9 +45,9 @@ HRESULT CPlayerInstance::Initialize(HWND parentWnd)
     if (!m_playbackEngine->Initialize())
         return E_FAIL;
 
-    m_commandEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    m_stopEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    m_renderTimer = CreateWaitableTimerW(nullptr, FALSE, nullptr);
+    m_commandEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
+    m_stopEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
+    m_renderTimer = CreateWaitableTimer(nullptr, FALSE, nullptr);
     if (!m_commandEvent || !m_stopEvent || !m_renderTimer)
         return HRESULT_FROM_WIN32(GetLastError());
 

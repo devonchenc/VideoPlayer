@@ -29,9 +29,7 @@ bool CPlaybackEngine::Initialize()
     m_videoFrameQueue.Reset();
 
     m_videoDone = false;
-    m_videoFrameEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-
-    m_rgbFrame.reset(av_frame_alloc());
+    m_videoFrameEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
 
     m_videoNextPts = 0.0;
     m_videoNextPtsValid = false;
@@ -342,6 +340,13 @@ bool CPlaybackEngine::ReceiveVideoFrames(std::stop_token stopToken)
             return false;
         }
 
+        FramePtr rgbFrame(av_frame_alloc());
+        if (!rgbFrame)
+            return false;
+
+        if (!ConvertFrameToBGRA(frame.get(), rgbFrame.get()))
+            return false;
+
         double pts = NormalizeTimestamp(frame->best_effort_timestamp, m_videoAVStream->time_base);
         AVRational frameRate = av_guess_frame_rate(m_formatContext.get(), m_videoAVStream, frame.get());
 
@@ -356,7 +361,7 @@ bool CPlaybackEngine::ReceiveVideoFrames(std::stop_token stopToken)
         m_videoNextPtsValid = true;
 
         VideoFrame output;
-        output.frame = std::move(frame);
+        output.frame = std::move(rgbFrame);
         output.pts = pts;
 
         ++m_decodedFrameCount;
@@ -436,26 +441,18 @@ void CPlaybackEngine::ResumeMasterClock()
 
 bool CPlaybackEngine::TryGetVideoFrame(VideoFrame& frame)
 {
-    VideoFrame yuvFrame;
-    bool result = m_videoFrameQueue.TryPop(yuvFrame);
+    bool result = m_videoFrameQueue.TryPop(frame);
     if (result)
     {
-        result = ConvertFrameToBGRA(yuvFrame.frame.get());
-        if (result)
+        // Start video clock
+        if (!m_videoClockStarted)
         {
-            // Start video clock
-            if (!m_videoClockStarted)
-            {
-                m_videoClockBasePts = yuvFrame.pts;
-                m_videoClockBaseTime = std::chrono::steady_clock::now();
-                m_videoClockStarted = true;
-            }
-
-            frame.frame = std::move(m_rgbFrame);
-            frame.pts = yuvFrame.pts;
-
-            return true;
+            m_videoClockBasePts = frame.pts;
+            m_videoClockBaseTime = std::chrono::steady_clock::now();
+            m_videoClockStarted = true;
         }
+
+        return true;
     }
 
     ResetEvent(m_videoFrameEvent);
@@ -476,11 +473,9 @@ size_t CPlaybackEngine::GetMaxVideoFrameQueueSize() const
     return std::max<size_t>(1, static_cast<size_t>(std::ceil(fps * bufferSeconds)));
 }
 
-bool CPlaybackEngine::ConvertFrameToBGRA(AVFrame* srcFrame)
+bool CPlaybackEngine::ConvertFrameToBGRA(AVFrame* srcFrame, AVFrame* rgbFrame)
 {
-    m_rgbFrame.reset(av_frame_alloc());
-
-    if (!srcFrame)
+    if (!srcFrame || !rgbFrame)
         return false;
 
     if (srcFrame->width <= 0 || srcFrame->height <= 0)
@@ -498,23 +493,20 @@ bool CPlaybackEngine::ConvertFrameToBGRA(AVFrame* srcFrame)
     if (!m_swsContext)
         return false;
 
-    // Release the previous frame buffer
-    av_frame_unref(m_rgbFrame.get());
-
     // Configure destination frame
-    m_rgbFrame->format = AV_PIX_FMT_BGRA;
-    m_rgbFrame->width = width;
-    m_rgbFrame->height = height;
+    rgbFrame->format = AV_PIX_FMT_BGRA;
+    rgbFrame->width = width;
+    rgbFrame->height = height;
 
     // Allocate destination buffer
-    if (av_frame_get_buffer(m_rgbFrame.get(), 32) < 0)
+    if (av_frame_get_buffer(rgbFrame, 32) < 0)
         return false;
 
     // Convert source frame to BGRA
-    const int outputHeight = sws_scale(m_swsContext, srcFrame->data, srcFrame->linesize, 0, height, m_rgbFrame->data, m_rgbFrame->linesize);
+    const int outputHeight = sws_scale(m_swsContext, srcFrame->data, srcFrame->linesize, 0, height, rgbFrame->data, rgbFrame->linesize);
     if (outputHeight != height)
     {
-        av_frame_unref(m_rgbFrame.get());
+        av_frame_unref(rgbFrame);
         return false;
     }
 

@@ -172,7 +172,7 @@ HRESULT CD3D12Renderer::CreateFence()
     if (FAILED(hr))
         return hr;
 
-    m_fenceEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    m_fenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
     if (!m_fenceEvent)
         return HRESULT_FROM_WIN32(GetLastError());
 
