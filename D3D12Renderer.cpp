@@ -45,7 +45,7 @@ HRESULT CD3D12Renderer::Resize(UINT width, UINT height)
     if (!m_swapChain)
         return InitializeSwapChain(width, height);
 
-    if (width == m_width && height == m_height)
+    if (width == m_windowWidth && height == m_windowHeight)
         return S_OK;
 
     // Wait until the GPU finishes using the old buffers
@@ -62,8 +62,8 @@ HRESULT CD3D12Renderer::Resize(UINT width, UINT height)
     if (FAILED(hr))
         return hr;
 
-    m_width = width;
-    m_height = height;
+    m_windowWidth = width;
+    m_windowHeight = height;
 
     // Recreate render target views.
     hr = CreateRenderTargetViews();
@@ -71,227 +71,6 @@ HRESULT CD3D12Renderer::Resize(UINT width, UINT height)
         return hr;
 
     // Recreate render target views
-    return S_OK;
-}
-
-void CD3D12Renderer::Shutdown()
-{
-    if (m_commandQueue && m_fence && m_fenceEvent)
-        WaitForGpu();
-
-    m_renderCommandList.Reset();
-    m_uploadCommandList.Reset();
-
-    for (FrameContext& frame : m_frames)
-        frame.commandAllocator.Reset();
-
-    for (ComPtr<ID3D12Resource>& target : m_renderTargets)
-        target.Reset();
-
-    if (m_frameLatencyWaitableObject)
-    {
-        CloseHandle(m_frameLatencyWaitableObject);
-        m_frameLatencyWaitableObject = nullptr;
-    }
-
-    m_rtvHeap.Reset();
-    m_swapChain.Reset();
-
-    m_fence.Reset();
-
-    if (m_fenceEvent)
-    {
-        CloseHandle(m_fenceEvent);
-        m_fenceEvent = nullptr;
-    }
-}
-
-HRESULT CD3D12Renderer::CreateCommandObjects()
-{
-    HRESULT hr;
-
-    for (UINT i = 0; i < FRAME_COUNT; ++i)
-    {
-        hr = m_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&m_frames[i].commandAllocator));
-        if (FAILED(hr))
-            return hr;
-    }
-
-    hr = m_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, m_frames[0].commandAllocator.Get(), nullptr, IID_PPV_ARGS(&m_renderCommandList));
-    if (FAILED(hr))
-        return hr;
-
-    // Command lists are initially open
-    hr = m_renderCommandList->Close();
-    if (FAILED(hr))
-        return hr;
-
-    hr = m_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&m_uploadCommandAllocator));
-    if (FAILED(hr))
-        return hr;
-
-    hr = m_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, m_uploadCommandAllocator.Get(), nullptr, IID_PPV_ARGS(&m_uploadCommandList));
-    if (FAILED(hr))
-        return hr;
-
-    hr = m_uploadCommandList->Close();
-    if (FAILED(hr))
-        return hr;
-
-    return S_OK;
-}
-
-HRESULT CD3D12Renderer::CreateFence()
-{
-    HRESULT hr = m_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_fence));
-    if (FAILED(hr))
-        return hr;
-
-    m_fenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
-    if (!m_fenceEvent)
-        return HRESULT_FROM_WIN32(GetLastError());
-
-    return S_OK;
-}
-
-HRESULT CD3D12Renderer::InitializeSwapChain(UINT width, UINT height)
-{
-    if (width == 0 || height == 0)
-        return E_INVALIDARG;
-
-    m_width = width;
-    m_height = height;
-
-    HRESULT hr = CreateSwapChain(m_hwnd);
-    if (FAILED(hr))
-        return hr;
-
-    hr = CreateRenderTargetViews();
-    if (FAILED(hr))
-        return hr;
-
-    hr = CreateVideoSrvHeap();
-    if (FAILED(hr))
-        return hr;
-
-    return S_OK;
-}
-
-HRESULT CD3D12Renderer::CreateSwapChain(HWND hwnd)
-{
-    DXGI_SWAP_CHAIN_DESC1 desc{};
-    desc.Width = m_width;
-    desc.Height = m_height;
-    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    desc.Stereo = FALSE;
-    desc.SampleDesc.Count = 1;
-    desc.SampleDesc.Quality = 0;
-    desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-    desc.BufferCount = FRAME_COUNT;
-    desc.Scaling = DXGI_SCALING_STRETCH;
-    desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-    desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
-    desc.Flags = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
-
-    ComPtr<IDXGISwapChain1> swapChain;
-    HRESULT hr = m_factory->CreateSwapChainForHwnd(m_commandQueue.Get(), hwnd, &desc, nullptr, nullptr, &swapChain);
-    if (FAILED(hr))
-        return hr;
-
-    hr = swapChain.As(&m_swapChain);
-    if (FAILED(hr))
-        return hr;
-
-    // Configure maximum frame latency
-    hr = m_swapChain->SetMaximumFrameLatency(1);
-    if (FAILED(hr))
-    {
-        return hr;
-    }
-
-    // Retrieve the frame latency waitable object
-    m_frameLatencyWaitableObject = m_swapChain->GetFrameLatencyWaitableObject();
-    if (!m_frameLatencyWaitableObject)
-    {
-        return HRESULT_FROM_WIN32(GetLastError());
-    }
-
-    // Disable Alt+Enter fullscreen switching
-    return m_factory->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER);
-}
-
-HRESULT CD3D12Renderer::CreateRenderTargetViews()
-{
-    D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
-    heapDesc.NumDescriptors = FRAME_COUNT;
-    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
-    heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-    heapDesc.NodeMask = 0;
-
-    m_rtvHeap.Reset();
-    HRESULT hr = m_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&m_rtvHeap));
-    if (FAILED(hr))
-        return hr;
-
-    m_rtvDescriptorSize = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
-
-    D3D12_CPU_DESCRIPTOR_HANDLE handle = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
-
-    for (UINT i = 0; i < FRAME_COUNT; ++i)
-    {
-        hr = m_swapChain->GetBuffer(i, IID_PPV_ARGS(&m_renderTargets[i]));
-        if (FAILED(hr))
-            return hr;
-
-        m_device->CreateRenderTargetView(m_renderTargets[i].Get(), nullptr, handle);
-
-        m_rtvHandles[i] = handle;
-
-        handle.ptr += m_rtvDescriptorSize;
-    }
-
-    return S_OK;
-}
-
-HRESULT CD3D12Renderer::WaitForFence(UINT64 fenceValue)
-{
-    if (m_fence->GetCompletedValue() >= fenceValue)
-        return S_OK;
-
-    HRESULT hr = m_fence->SetEventOnCompletion(fenceValue, m_fenceEvent);
-    if (FAILED(hr))
-        return hr;
-
-    DWORD result = WaitForSingleObject(m_fenceEvent, INFINITE);
-    if (result != WAIT_OBJECT_0)
-        return HRESULT_FROM_WIN32(result == WAIT_FAILED ? GetLastError() : ERROR_GEN_FAILURE);
-
-    return S_OK;
-}
-
-HRESULT CD3D12Renderer::WaitForGpu()
-{
-    if (!m_commandQueue || !m_fence)
-        return E_FAIL;
-
-    const UINT64 fenceValue = ++m_nextFenceValue;
-
-    HRESULT hr = m_commandQueue->Signal(m_fence.Get(), fenceValue);
-    if (FAILED(hr))
-        return hr;
-
-    if (m_fence->GetCompletedValue() < fenceValue)
-    {
-        hr = m_fence->SetEventOnCompletion(fenceValue, m_fenceEvent);
-        if (FAILED(hr))
-            return hr;
-
-        const DWORD waitResult = WaitForSingleObject(m_fenceEvent, INFINITE);
-
-        if (waitResult != WAIT_OBJECT_0)
-            return HRESULT_FROM_WIN32(waitResult == WAIT_FAILED ? GetLastError() : ERROR_GEN_FAILURE);
-    }
-
     return S_OK;
 }
 
@@ -422,21 +201,15 @@ HRESULT CD3D12Renderer::Render()
     m_renderCommandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
 
     // 6. Set viewport and scissor rect
-    D3D12_VIEWPORT viewport{};
-    viewport.TopLeftX = 0.0f;
-    viewport.TopLeftY = 0.0f;
-    viewport.Width = static_cast<float>(m_width);
-    viewport.Height = static_cast<float>(m_height);
-    viewport.MinDepth = 0.0f;
-    viewport.MaxDepth = 1.0f;
+    D3D12_VIEWPORT viewport = CalculateViewport();
+    m_renderCommandList->RSSetViewports(1, &viewport);
 
     D3D12_RECT scissorRect{};
     scissorRect.left = 0;
     scissorRect.top = 0;
-    scissorRect.right = static_cast<LONG>(m_width);
-    scissorRect.bottom = static_cast<LONG>(m_height);
+    scissorRect.right = static_cast<LONG>(m_windowWidth);
+    scissorRect.bottom = static_cast<LONG>(m_windowHeight);
 
-    m_renderCommandList->RSSetViewports(1, &viewport);
     m_renderCommandList->RSSetScissorRects(1, &scissorRect);
 
     // 7. Clear render target
@@ -560,165 +333,183 @@ void CD3D12Renderer::Clear()
     }
 }
 
-HRESULT CD3D12Renderer::CreateVideoTexture(UINT width, UINT height)
+void CD3D12Renderer::Shutdown()
 {
-    if (width == 0 || height == 0)
-        return E_INVALIDARG;
+    if (m_commandQueue && m_fence && m_fenceEvent)
+        WaitForGpu();
 
-    m_videoTexture.Reset();
-    m_videoUploadBuffer.Reset();
+    m_renderCommandList.Reset();
+    m_uploadCommandList.Reset();
 
-    D3D12_RESOURCE_DESC textureDesc{};
-    textureDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-    textureDesc.Width = width;
-    textureDesc.Height = height;
-    textureDesc.DepthOrArraySize = 1;
-    textureDesc.MipLevels = 1;
-    textureDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-    textureDesc.SampleDesc.Count = 1;
-    textureDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-    textureDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+    for (FrameContext& frame : m_frames)
+        frame.commandAllocator.Reset();
 
-    D3D12_HEAP_PROPERTIES defaultHeap{};
-    defaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
+    for (ComPtr<ID3D12Resource>& target : m_renderTargets)
+        target.Reset();
 
-    HRESULT hr = m_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &textureDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&m_videoTexture));
-    if (FAILED(hr))
-        return hr;
-
-    // Calculate the required upload buffer size and layout
-    m_device->GetCopyableFootprints(&textureDesc, 0, 1, 0, &m_videoFootprint, nullptr, nullptr, &m_videoUploadBufferSize);
-
-    D3D12_HEAP_PROPERTIES uploadHeap{};
-    uploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
-
-    D3D12_RESOURCE_DESC bufferDesc{};
-    bufferDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-    bufferDesc.Width = m_videoUploadBufferSize;
-    bufferDesc.Height = 1;
-    bufferDesc.DepthOrArraySize = 1;
-    bufferDesc.MipLevels = 1;
-    bufferDesc.SampleDesc.Count = 1;
-    bufferDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-    hr = m_device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &bufferDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&m_videoUploadBuffer));
-    if (FAILED(hr))
+    if (m_frameLatencyWaitableObject)
     {
-        m_videoTexture.Reset();
-        return hr;
+        CloseHandle(m_frameLatencyWaitableObject);
+        m_frameLatencyWaitableObject = nullptr;
     }
 
-    m_videoTexturesInShaderState = false;
+    m_rtvHeap.Reset();
+    m_swapChain.Reset();
 
-    return S_OK;
-}
+    m_fence.Reset();
 
-HRESULT CD3D12Renderer::CreateUploadBuffer(UINT64 size, ComPtr<ID3D12Resource>& buffer)
-{
-    D3D12_HEAP_PROPERTIES heapProperties{};
-    heapProperties.Type = D3D12_HEAP_TYPE_UPLOAD;
-
-    D3D12_RESOURCE_DESC desc{};
-    desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-    desc.Width = size;
-    desc.Height = 1;
-    desc.DepthOrArraySize = 1;
-    desc.MipLevels = 1;
-    desc.SampleDesc.Count = 1;
-    desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-    return m_device->CreateCommittedResource(&heapProperties, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&buffer));
-}
-
-HRESULT CD3D12Renderer::CopyVideoPlanesToGpu()
-{
-    HRESULT hr = m_uploadCommandAllocator->Reset();
-    if (FAILED(hr))
-        return hr;
-
-    hr = m_uploadCommandList->Reset(m_uploadCommandAllocator.Get(), nullptr);
-    if (FAILED(hr))
-        return hr;
-
-    // Transition video texture from PIXEL_SHADER_RESOURCE to COPY_DEST
-    D3D12_RESOURCE_BARRIER barrier{};
-    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier.Transition.pResource = m_videoTexture.Get();
-    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
-
-    if (m_videoTexturesInShaderState)
+    if (m_fenceEvent)
     {
-        m_uploadCommandList->ResourceBarrier(1, &barrier);
+        CloseHandle(m_fenceEvent);
+        m_fenceEvent = nullptr;
+    }
+}
+
+HRESULT CD3D12Renderer::CreateCommandObjects()
+{
+    HRESULT hr;
+
+    for (UINT i = 0; i < FRAME_COUNT; ++i)
+    {
+        hr = m_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&m_frames[i].commandAllocator));
+        if (FAILED(hr))
+            return hr;
     }
 
-    // Source: Upload Buffer
-    D3D12_TEXTURE_COPY_LOCATION srcLocation{};
-    srcLocation.pResource = m_videoUploadBuffer.Get();
-    srcLocation.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-    srcLocation.PlacedFootprint = m_videoFootprint;
+    hr = m_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, m_frames[0].commandAllocator.Get(), nullptr, IID_PPV_ARGS(&m_renderCommandList));
+    if (FAILED(hr))
+        return hr;
 
-    // Destination: Video Texture
-    D3D12_TEXTURE_COPY_LOCATION dstLocation{};
-    dstLocation.pResource = m_videoTexture.Get();
-    dstLocation.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-    dstLocation.SubresourceIndex = 0;
+    // Command lists are initially open
+    hr = m_renderCommandList->Close();
+    if (FAILED(hr))
+        return hr;
 
-    // Copy Upload Buffer to Texture2D
-    m_uploadCommandList->CopyTextureRegion(&dstLocation, 0, 0, 0, &srcLocation, nullptr);
+    hr = m_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&m_uploadCommandAllocator));
+    if (FAILED(hr))
+        return hr;
 
-    // Transition video texture to PIXEL_SHADER_RESOURCE
-    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-
-    m_uploadCommandList->ResourceBarrier(1, &barrier);
+    hr = m_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, m_uploadCommandAllocator.Get(), nullptr, IID_PPV_ARGS(&m_uploadCommandList));
+    if (FAILED(hr))
+        return hr;
 
     hr = m_uploadCommandList->Close();
     if (FAILED(hr))
         return hr;
 
-    ID3D12CommandList* lists[] = { m_uploadCommandList.Get()};
-
-    m_commandQueue->ExecuteCommandLists(1, lists);
-
-    m_videoTexturesInShaderState = true;
-
-    // Signal GPU
-    m_uploadFenceValue = SignalGpu();
-    if (m_uploadFenceValue == 0)
-        return E_FAIL;
-
     return S_OK;
 }
 
-HRESULT CD3D12Renderer::CreateVideoSrvHeap()
+HRESULT CD3D12Renderer::CreateFence()
 {
-    D3D12_DESCRIPTOR_HEAP_DESC desc{};
-    desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    desc.NumDescriptors = 1;
-    desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-
-    HRESULT hr = m_device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&m_videoSrvHeap));
+    HRESULT hr = m_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_fence));
     if (FAILED(hr))
         return hr;
 
-    // Get CPU descriptor handle
-    m_videoTextureSrvHandle = m_videoSrvHeap->GetCPUDescriptorHandleForHeapStart();
+    m_fenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+    if (!m_fenceEvent)
+        return HRESULT_FROM_WIN32(GetLastError());
 
     return S_OK;
 }
 
-void CD3D12Renderer::CreateVideoSrv()
+HRESULT CD3D12Renderer::InitializeSwapChain(UINT width, UINT height)
 {
-    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-    srvDesc.Texture2D.MostDetailedMip = 0;
-    srvDesc.Texture2D.MipLevels = 1;
-    srvDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    if (width == 0 || height == 0)
+        return E_INVALIDARG;
 
-    m_device->CreateShaderResourceView(m_videoTexture.Get(), &srvDesc, m_videoTextureSrvHandle);
+    m_windowWidth = width;
+    m_windowHeight = height;
+
+    HRESULT hr = CreateSwapChain(m_hwnd);
+    if (FAILED(hr))
+        return hr;
+
+    hr = CreateRenderTargetViews();
+    if (FAILED(hr))
+        return hr;
+
+    hr = CreateVideoSrvHeap();
+    if (FAILED(hr))
+        return hr;
+
+    return S_OK;
+}
+
+HRESULT CD3D12Renderer::CreateSwapChain(HWND hwnd)
+{
+    DXGI_SWAP_CHAIN_DESC1 desc{};
+    desc.Width = m_windowWidth;
+    desc.Height = m_windowHeight;
+    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.Stereo = FALSE;
+    desc.SampleDesc.Count = 1;
+    desc.SampleDesc.Quality = 0;
+    desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    desc.BufferCount = FRAME_COUNT;
+    desc.Scaling = DXGI_SCALING_STRETCH;
+    desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+    desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+    desc.Flags = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
+
+    ComPtr<IDXGISwapChain1> swapChain;
+    HRESULT hr = m_factory->CreateSwapChainForHwnd(m_commandQueue.Get(), hwnd, &desc, nullptr, nullptr, &swapChain);
+    if (FAILED(hr))
+        return hr;
+
+    hr = swapChain.As(&m_swapChain);
+    if (FAILED(hr))
+        return hr;
+
+    // Configure maximum frame latency
+    hr = m_swapChain->SetMaximumFrameLatency(1);
+    if (FAILED(hr))
+    {
+        return hr;
+    }
+
+    // Retrieve the frame latency waitable object
+    m_frameLatencyWaitableObject = m_swapChain->GetFrameLatencyWaitableObject();
+    if (!m_frameLatencyWaitableObject)
+    {
+        return HRESULT_FROM_WIN32(GetLastError());
+    }
+
+    // Disable Alt+Enter fullscreen switching
+    return m_factory->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER);
+}
+
+HRESULT CD3D12Renderer::CreateRenderTargetViews()
+{
+    D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
+    heapDesc.NumDescriptors = FRAME_COUNT;
+    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+    heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+    heapDesc.NodeMask = 0;
+
+    m_rtvHeap.Reset();
+    HRESULT hr = m_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&m_rtvHeap));
+    if (FAILED(hr))
+        return hr;
+
+    m_rtvDescriptorSize = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+
+    D3D12_CPU_DESCRIPTOR_HANDLE handle = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
+
+    for (UINT i = 0; i < FRAME_COUNT; ++i)
+    {
+        hr = m_swapChain->GetBuffer(i, IID_PPV_ARGS(&m_renderTargets[i]));
+        if (FAILED(hr))
+            return hr;
+
+        m_device->CreateRenderTargetView(m_renderTargets[i].Get(), nullptr, handle);
+
+        m_rtvHandles[i] = handle;
+
+        handle.ptr += m_rtvDescriptorSize;
+    }
+
+    return S_OK;
 }
 
 HRESULT CD3D12Renderer::CreateRootSignature()
@@ -886,6 +677,230 @@ HRESULT CD3D12Renderer::CompileShader(const std::wstring& filename, const char* 
             OutputDebugStringA(static_cast<const char*>(errorBlob->GetBufferPointer()));
 
         return hr;
+    }
+
+    return S_OK;
+}
+
+HRESULT CD3D12Renderer::CreateVideoSrvHeap()
+{
+    D3D12_DESCRIPTOR_HEAP_DESC desc{};
+    desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    desc.NumDescriptors = 1;
+    desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+
+    HRESULT hr = m_device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&m_videoSrvHeap));
+    if (FAILED(hr))
+        return hr;
+
+    // Get CPU descriptor handle
+    m_videoTextureSrvHandle = m_videoSrvHeap->GetCPUDescriptorHandleForHeapStart();
+
+    return S_OK;
+}
+
+void CD3D12Renderer::CreateVideoSrv()
+{
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Texture2D.MostDetailedMip = 0;
+    srvDesc.Texture2D.MipLevels = 1;
+    srvDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+
+    m_device->CreateShaderResourceView(m_videoTexture.Get(), &srvDesc, m_videoTextureSrvHandle);
+}
+
+HRESULT CD3D12Renderer::CreateVideoTexture(UINT width, UINT height)
+{
+    if (width == 0 || height == 0)
+        return E_INVALIDARG;
+
+    m_videoTexture.Reset();
+    m_videoUploadBuffer.Reset();
+
+    D3D12_RESOURCE_DESC textureDesc{};
+    textureDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    textureDesc.Width = width;
+    textureDesc.Height = height;
+    textureDesc.DepthOrArraySize = 1;
+    textureDesc.MipLevels = 1;
+    textureDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    textureDesc.SampleDesc.Count = 1;
+    textureDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    textureDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+    D3D12_HEAP_PROPERTIES defaultHeap{};
+    defaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+    HRESULT hr = m_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &textureDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&m_videoTexture));
+    if (FAILED(hr))
+        return hr;
+
+    // Calculate the required upload buffer size and layout
+    m_device->GetCopyableFootprints(&textureDesc, 0, 1, 0, &m_videoFootprint, nullptr, nullptr, &m_videoUploadBufferSize);
+
+    D3D12_HEAP_PROPERTIES uploadHeap{};
+    uploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
+
+    D3D12_RESOURCE_DESC bufferDesc{};
+    bufferDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    bufferDesc.Width = m_videoUploadBufferSize;
+    bufferDesc.Height = 1;
+    bufferDesc.DepthOrArraySize = 1;
+    bufferDesc.MipLevels = 1;
+    bufferDesc.SampleDesc.Count = 1;
+    bufferDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    hr = m_device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &bufferDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&m_videoUploadBuffer));
+    if (FAILED(hr))
+    {
+        m_videoTexture.Reset();
+        return hr;
+    }
+
+    m_videoTexturesInShaderState = false;
+
+    return S_OK;
+}
+
+HRESULT CD3D12Renderer::CreateUploadBuffer(UINT64 size, ComPtr<ID3D12Resource>& buffer)
+{
+    D3D12_HEAP_PROPERTIES heapProperties{};
+    heapProperties.Type = D3D12_HEAP_TYPE_UPLOAD;
+
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    desc.Width = size;
+    desc.Height = 1;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels = 1;
+    desc.SampleDesc.Count = 1;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    return m_device->CreateCommittedResource(&heapProperties, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&buffer));
+}
+
+D3D12_VIEWPORT CD3D12Renderer::CalculateViewport()
+{
+    D3D12_VIEWPORT viewport{};
+
+    if (m_windowWidth == 0 || m_windowHeight == 0 || m_videoWidth == 0 || m_videoHeight == 0)
+        return viewport;
+
+    const float scale = std::min(static_cast<float>(m_windowWidth) / m_videoWidth, static_cast<float>(m_windowHeight) / m_videoHeight);
+    const float displayWidth = m_videoWidth * scale;
+    const float displayHeight = m_videoHeight * scale;
+
+    viewport.TopLeftX = (m_windowWidth - displayWidth) / 2.0f;
+    viewport.TopLeftY = (m_windowHeight - displayHeight) / 2.0f;
+    viewport.Width = displayWidth;
+    viewport.Height = displayHeight;
+    viewport.MinDepth = 0.0f;
+    viewport.MaxDepth = 1.0f;
+
+    return viewport;
+}
+
+HRESULT CD3D12Renderer::CopyVideoPlanesToGpu()
+{
+    HRESULT hr = m_uploadCommandAllocator->Reset();
+    if (FAILED(hr))
+        return hr;
+
+    hr = m_uploadCommandList->Reset(m_uploadCommandAllocator.Get(), nullptr);
+    if (FAILED(hr))
+        return hr;
+
+    // Transition video texture from PIXEL_SHADER_RESOURCE to COPY_DEST
+    D3D12_RESOURCE_BARRIER barrier{};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier.Transition.pResource = m_videoTexture.Get();
+    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+
+    if (m_videoTexturesInShaderState)
+    {
+        m_uploadCommandList->ResourceBarrier(1, &barrier);
+    }
+
+    // Source: Upload Buffer
+    D3D12_TEXTURE_COPY_LOCATION srcLocation{};
+    srcLocation.pResource = m_videoUploadBuffer.Get();
+    srcLocation.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    srcLocation.PlacedFootprint = m_videoFootprint;
+
+    // Destination: Video Texture
+    D3D12_TEXTURE_COPY_LOCATION dstLocation{};
+    dstLocation.pResource = m_videoTexture.Get();
+    dstLocation.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    dstLocation.SubresourceIndex = 0;
+
+    // Copy Upload Buffer to Texture2D
+    m_uploadCommandList->CopyTextureRegion(&dstLocation, 0, 0, 0, &srcLocation, nullptr);
+
+    // Transition video texture to PIXEL_SHADER_RESOURCE
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+
+    m_uploadCommandList->ResourceBarrier(1, &barrier);
+
+    hr = m_uploadCommandList->Close();
+    if (FAILED(hr))
+        return hr;
+
+    ID3D12CommandList* lists[] = { m_uploadCommandList.Get() };
+
+    m_commandQueue->ExecuteCommandLists(1, lists);
+
+    m_videoTexturesInShaderState = true;
+
+    // Signal GPU
+    m_uploadFenceValue = SignalGpu();
+    if (m_uploadFenceValue == 0)
+        return E_FAIL;
+
+    return S_OK;
+}
+
+HRESULT CD3D12Renderer::WaitForFence(UINT64 fenceValue)
+{
+    if (m_fence->GetCompletedValue() >= fenceValue)
+        return S_OK;
+
+    HRESULT hr = m_fence->SetEventOnCompletion(fenceValue, m_fenceEvent);
+    if (FAILED(hr))
+        return hr;
+
+    DWORD result = WaitForSingleObject(m_fenceEvent, INFINITE);
+    if (result != WAIT_OBJECT_0)
+        return HRESULT_FROM_WIN32(result == WAIT_FAILED ? GetLastError() : ERROR_GEN_FAILURE);
+
+    return S_OK;
+}
+
+HRESULT CD3D12Renderer::WaitForGpu()
+{
+    if (!m_commandQueue || !m_fence)
+        return E_FAIL;
+
+    const UINT64 fenceValue = ++m_nextFenceValue;
+
+    HRESULT hr = m_commandQueue->Signal(m_fence.Get(), fenceValue);
+    if (FAILED(hr))
+        return hr;
+
+    if (m_fence->GetCompletedValue() < fenceValue)
+    {
+        hr = m_fence->SetEventOnCompletion(fenceValue, m_fenceEvent);
+        if (FAILED(hr))
+            return hr;
+
+        const DWORD waitResult = WaitForSingleObject(m_fenceEvent, INFINITE);
+
+        if (waitResult != WAIT_OBJECT_0)
+            return HRESULT_FROM_WIN32(waitResult == WAIT_FAILED ? GetLastError() : ERROR_GEN_FAILURE);
     }
 
     return S_OK;

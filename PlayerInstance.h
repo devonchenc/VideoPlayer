@@ -30,6 +30,7 @@ enum class RenderWaitResult
 {
     StopRequested,
     CommandReceived,
+    PlaybackStateChanged,
     VideoFrameAvailable,
     TimerExpired,
     FrameLatencyAvailable,
@@ -74,7 +75,6 @@ private:
 
     std::mutex m_commandMutex;
     std::queue<PlayerCommand> m_commandQueue;
-    std::atomic<PlaybackState> m_playbackState{ PlaybackState::Stopped };
 
     HWND m_hwnd{ nullptr };
     RECT m_windowPos{};

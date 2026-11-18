@@ -103,40 +103,26 @@ HRESULT CPlayerInstance::PlayLive(long cameraNumber, long playSpeed)
     const std::string url = "rtsp://127.0.0.1:8554/test";
     m_playbackEngine->PlayLive(url);
 
-    std::lock_guard lock(m_commandMutex);
-
-    m_commandQueue.push(PlayerCommand{ PlayerCommandType::Play });
-    SetEvent(m_commandEvent);
-
     return S_OK;
 }
 
 HRESULT CPlayerInstance::PlayStop()
 {
-    std::lock_guard lock(m_commandMutex);
-
-    m_commandQueue.push(PlayerCommand{ PlayerCommandType::Stop });
-    SetEvent(m_commandEvent);
+    m_playbackEngine->PlayStop();
 
     return S_OK;
 }
 
 HRESULT CPlayerInstance::PlayPause()
 {
-    std::lock_guard lock(m_commandMutex);
-
-    m_commandQueue.push(PlayerCommand{ PlayerCommandType::Pause });
-    SetEvent(m_commandEvent);
+    m_playbackEngine->PlayPause();
 
     return S_OK;
 }
 
 HRESULT CPlayerInstance::PlayResume()
 {
-    std::lock_guard lock(m_commandMutex);
-
-    m_commandQueue.push(PlayerCommand{ PlayerCommandType::Resume });
-    SetEvent(m_commandEvent);
+    m_playbackEngine->PlayResume();
 
     return S_OK;
 }
@@ -180,12 +166,16 @@ void CPlayerInstance::RenderThread(std::stop_token stopToken)
 
         // Calculate the next wake-up time
         const DWORD timeoutMs = CalculateNextWakeUpTimeout();
-        // 5. Wait for DXGI when a frame is ready
-        const bool waitForFrameLatency = (m_playbackState == PlaybackState::Playing) && m_pendingVideoFrame.has_value() && (timeoutMs == 0);
+        // Wait for DXGI when a frame is ready
+        const bool waitForFrameLatency = (m_playbackEngine->GetPlaybackState() == PlaybackState::Playing) && m_pendingVideoFrame.has_value() && (timeoutMs == 0);
 
         const RenderWaitResult result = WaitForRenderEvents(timeoutMs, waitForFrameLatency);
         if (result == RenderWaitResult::StopRequested || result == RenderWaitResult::Failed)
             break;
+        else if (result == RenderWaitResult::PlaybackStateChanged)
+        {
+            m_pendingVideoFrame.reset();
+        }
     }
 
     m_renderer->Shutdown();
@@ -216,44 +206,6 @@ void CPlayerInstance::ProcessPendingCommands(std::stop_token stopToken)
             break;
         case PlayerCommandType::Clear:
             break;
-        case PlayerCommandType::Play:
-        {
-            if (m_playbackState != PlaybackState::Stopped)
-                break;
-
-            m_pendingVideoFrame.reset();
-            m_playbackState = PlaybackState::Playing;
-            break;
-        }
-        case PlayerCommandType::Stop:
-        {
-            if (m_playbackState == PlaybackState::Stopped)
-                break;
-
-            m_playbackEngine->Stop();
-            m_playbackState = PlaybackState::Stopped;
-            break;
-        }
-        case PlayerCommandType::Pause:
-        {
-            if (m_playbackState == PlaybackState::Stopped)
-                break;
-
-            if (m_playbackState.exchange(PlaybackState::Paused) == PlaybackState::Paused)
-                break;
-
-            m_playbackEngine->Pause();
-            break;
-        }
-        case PlayerCommandType::Resume:
-        {
-            if (m_playbackState != PlaybackState::Paused)
-                break;
-
-            m_playbackEngine->Resume();
-            m_playbackState = PlaybackState::Playing;
-            break;
-        }
         default:
             break;
         }
@@ -276,11 +228,7 @@ void CPlayerInstance::ProcessPendingCommands(std::stop_token stopToken)
 void CPlayerInstance::ProcessVideoFrames(std::stop_token stopToken)
 {
     // Only process video frames while playing
-    if (m_playbackState != PlaybackState::Playing)
-        return;
-
-    // Process frames until we find one that is ready to render
-    while (m_playbackState == PlaybackState::Playing)
+    while (m_playbackEngine->GetPlaybackState() == PlaybackState::Playing)
     {
         // Get the next frame if there is no pending frame
         if (!m_pendingVideoFrame)
@@ -329,7 +277,7 @@ void CPlayerInstance::ProcessVideoFrames(std::stop_token stopToken)
 
 DWORD CPlayerInstance::CalculateNextWakeUpTimeout() const
 {
-    if (m_playbackState != PlaybackState::Playing)
+    if (m_playbackEngine->GetPlaybackState() != PlaybackState::Playing)
         return INFINITE;
 
     if (!m_pendingVideoFrame)
@@ -361,13 +309,14 @@ RenderWaitResult CPlayerInstance::WaitForRenderEvents(DWORD timeoutMs, bool wait
         }
     }
 
-    HANDLE handles[5]{};
+    HANDLE handles[6]{};
     DWORD count = 0;
 
     // Stop event has the highest priority
     handles[count++] = m_stopEvent;
     // Commands must be processed immediately
     handles[count++] = m_commandEvent;
+    handles[count++] = m_playbackEngine->GetStateChangedEvent();
     // Wait for a new video frame only when there is no pending frame
     if (!m_pendingVideoFrame)
     {
@@ -417,8 +366,12 @@ RenderWaitResult CPlayerInstance::WaitForRenderEvents(DWORD timeoutMs, bool wait
     {
         return RenderWaitResult::CommandReceived;
     }
+    else if (index == 2)
+    {
+        return RenderWaitResult::PlaybackStateChanged;
+    }
 
-    DWORD nextIndex = 2;
+    DWORD nextIndex = 3;
 
     if (!m_pendingVideoFrame)
     {

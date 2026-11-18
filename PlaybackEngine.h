@@ -21,7 +21,7 @@ struct PlayerConfig
 class CPlaybackEngine
 {
 public:
-    CPlaybackEngine() = default;
+    CPlaybackEngine();
     ~CPlaybackEngine();
 
     CPlaybackEngine(const CPlaybackEngine&) = delete;
@@ -33,13 +33,16 @@ public:
     bool Initialize();
     bool PlayLive(const std::string& url);
     bool PlayRecorded(const std::string& url);
-    void Stop();
-    void Pause();
-    void Resume();
+    void PlayStop();
+    void PlayPause();
+    void PlayResume();
+    void Shutdown();
 
     double GetMasterClock() const;
     bool TryGetVideoFrame(VideoFrame& frame);
     HANDLE GetVideoFrameEvent() const { return m_videoFrameEvent; }
+    HANDLE GetStateChangedEvent() const { return m_stateChangedEvent; }
+    PlaybackState GetPlaybackState() const { return m_playbackState; }
 
 private:
     void StartThreads();
@@ -75,6 +78,7 @@ private:
     double m_timestampOrigin{ 0.0 };
 
     HANDLE m_videoFrameEvent{ nullptr };
+    HANDLE m_stateChangedEvent{ nullptr };
 
     // Queues
     CBlockingQueue<PacketPtr> m_videoPacketQueue{ 128 };
@@ -86,6 +90,7 @@ private:
     std::jthread m_demuxThread;
     std::jthread m_videoDecodeThread;
     std::stop_source m_stopSource;
+    std::mutex m_mutex;
 
     std::atomic<bool> m_videoDone{ false };
 
@@ -105,4 +110,5 @@ private:
 
     std::string m_url;
     StreamType m_streamType{ StreamType::Live };
+    std::atomic<PlaybackState> m_playbackState{ PlaybackState::Stopped };
 };

@@ -16,14 +16,20 @@ namespace
     }
 }
 
+CPlaybackEngine::CPlaybackEngine()
+{
+    m_videoFrameEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
+    m_stateChangedEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+}
+
 CPlaybackEngine::~CPlaybackEngine()
 {
-    Stop();
+    Shutdown();
 }
 
 bool CPlaybackEngine::Initialize()
 {
-    Stop();
+    Shutdown();
 
     m_decodedFrame.reset(av_frame_alloc());
     if (!m_decodedFrame)
@@ -33,7 +39,6 @@ bool CPlaybackEngine::Initialize()
     m_videoFrameQueue.Reset();
 
     m_videoDone = false;
-    m_videoFrameEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
 
     m_videoNextPts = 0.0;
     m_videoNextPtsValid = false;
@@ -48,8 +53,15 @@ bool CPlaybackEngine::PlayLive(const std::string& url)
     if (!Initialize())
         return false;
 
-    m_url = url;
-    m_streamType = StreamType::Live;
+    {
+        std::lock_guard lock(m_mutex);
+
+        m_url = url;
+        m_streamType = StreamType::Live;
+        m_playbackState = PlaybackState::Playing;
+    }
+
+    SetEvent(m_stateChangedEvent);
 
     StartThreads();
 
@@ -61,15 +73,61 @@ bool CPlaybackEngine::PlayRecorded(const std::string& url)
     if (!Initialize())
         return false;
 
-    m_url = url;
-    m_streamType = StreamType::Recorded;
+    {
+        std::lock_guard lock(m_mutex);
+
+        m_url = url;
+        m_streamType = StreamType::Recorded;
+        m_playbackState = PlaybackState::Playing;
+    }
+
+    SetEvent(m_stateChangedEvent);
 
     StartThreads();
 
     return true;
 }
 
-void CPlaybackEngine::Stop()
+void CPlaybackEngine::PlayStop()
+{
+    m_playbackState = PlaybackState::Stopped;
+    SetEvent(m_stateChangedEvent);
+}
+
+void CPlaybackEngine::PlayPause()
+{
+    if (m_streamType == StreamType::Live)
+    {
+        m_videoFrameQueue.SetDropOldestWhenFull(true);
+    }
+    else
+    {
+        PauseMasterClock();
+    }
+
+    m_playbackState = PlaybackState::Paused;
+    SetEvent(m_stateChangedEvent);
+}
+
+void CPlaybackEngine::PlayResume()
+{
+    if (m_streamType == StreamType::Live)
+    {
+        m_videoFrameQueue.Clear();
+        m_videoFrameQueue.SetDropOldestWhenFull(false);
+    }
+    else
+    {
+        ResumeMasterClock();
+    }
+
+    m_playbackState = PlaybackState::Playing;
+    SetEvent(m_stateChangedEvent);
+
+    NotifyDataReady();
+}
+
+void CPlaybackEngine::Shutdown()
 {
     m_stopSource.request_stop();
 
@@ -91,40 +149,12 @@ void CPlaybackEngine::Stop()
     m_videoDone = false;
 }
 
-void CPlaybackEngine::Pause()
-{
-    if (m_streamType == StreamType::Live)
-    {
-        m_videoFrameQueue.SetDropOldestWhenFull(true);
-    }
-    else
-    {
-        PauseMasterClock();
-    }
-}
-
-void CPlaybackEngine::Resume()
-{
-    if (m_streamType == StreamType::Live)
-    {
-        m_videoFrameQueue.Clear();
-        m_videoFrameQueue.SetDropOldestWhenFull(false);
-    }
-    else
-    {
-        ResumeMasterClock();
-    }
-
-    NotifyDataReady();
-}
-
 void CPlaybackEngine::StartThreads()
 {
     m_stopSource = std::stop_source{};
     const std::stop_token token = m_stopSource.get_token();
 
     m_demuxThread = std::jthread([this, token]() { DemuxThread(token); });
-
     m_videoDecodeThread = std::jthread([this, token]() { VideoDecodeThread(token); });
 }
 
@@ -442,22 +472,21 @@ void CPlaybackEngine::ResumeMasterClock()
 bool CPlaybackEngine::TryGetVideoFrame(VideoFrame& frame)
 {
     bool result = m_videoFrameQueue.TryPop(frame);
-    if (result)
+    if (!result)
     {
-        // Start video clock
-        if (!m_videoClockStarted)
-        {
-            m_videoClockBasePts = frame.pts;
-            m_videoClockBaseTime = std::chrono::steady_clock::now();
-            m_videoClockStarted = true;
-        }
-
-        return true;
+        ResetEvent(m_videoFrameEvent);
+        return false;
     }
 
-    ResetEvent(m_videoFrameEvent);
+    // Start video clock
+    if (!m_videoClockStarted)
+    {
+        m_videoClockBasePts = frame.pts;
+        m_videoClockBaseTime = std::chrono::steady_clock::now();
+        m_videoClockStarted = true;
+    }
 
-    return result;
+    return true;
 }
 
 size_t CPlaybackEngine::GetMaxVideoFrameQueueSize() const
@@ -486,7 +515,7 @@ bool CPlaybackEngine::ConvertFrameToBGRA(AVFrame* srcFrame, AVFrame* rgbFrame)
 
     const int width = srcFrame->width;
     const int height = srcFrame->height;
-    const auto srcFormat = static_cast<AVPixelFormat>(srcFrame->format);
+    const AVPixelFormat srcFormat = static_cast<AVPixelFormat>(srcFrame->format);
 
     // Update SwsContext if the source properties have changed
     m_swsContext = sws_getCachedContext(m_swsContext, width, height, srcFormat, width, height, AV_PIX_FMT_BGRA, SWS_BILINEAR, nullptr, nullptr, nullptr);

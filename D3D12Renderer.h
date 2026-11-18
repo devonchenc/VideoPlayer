@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <mutex>
+#define NOMINMAX
 #include <Windows.h>
 #include <wrl/client.h>
 #include <dxgi1_6.h>
@@ -31,16 +32,16 @@ class CD3D12Renderer
 public:
     HRESULT Initialize(HWND hwnd);
     HRESULT Resize(UINT width, UINT height);
-    void Shutdown();
     HRESULT UploadVideoFrame(AVFrame* frame);
     HRESULT Render();
     void Clear();
+    void Shutdown();
     HANDLE GetFrameLatencyWaitableObject() const { return m_frameLatencyWaitableObject; }
 
 private:
-    HRESULT InitializeSwapChain(UINT width, UINT height);
     HRESULT CreateCommandObjects();
     HRESULT CreateFence();
+    HRESULT InitializeSwapChain(UINT width, UINT height);
     HRESULT CreateSwapChain(HWND hwnd);
     HRESULT CreateRenderTargetViews();
     HRESULT CreateRootSignature();
@@ -50,6 +51,7 @@ private:
     void CreateVideoSrv();
     HRESULT CreateVideoTexture(UINT width, UINT height);
     HRESULT CreateUploadBuffer(UINT64 size, ComPtr<ID3D12Resource>& buffer);
+    D3D12_VIEWPORT CalculateViewport();
     HRESULT CopyVideoPlanesToGpu();
     HRESULT WaitForFence(UINT64 fenceValue);
     HRESULT WaitForGpu();
@@ -75,8 +77,8 @@ private:
     HANDLE m_fenceEvent{ nullptr };
     HANDLE m_frameLatencyWaitableObject{ nullptr };
 
-    UINT m_width{ 0 };
-    UINT m_height{ 0 };
+    UINT m_windowWidth{ 0 };
+    UINT m_windowHeight{ 0 };
     UINT m_rtvDescriptorSize{ 0 };
 
     UINT m_videoWidth{ 0 };
