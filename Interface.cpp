@@ -10,17 +10,6 @@ HRESULT InitializePlayer()
 
 HRESULT CreatePlayerInstance(HWND playbackWndHandle, HWND callbackWndHandle, long* playerInstance)
 {
-    if (!playbackWndHandle || !playerInstance)
-        return E_INVALIDARG;
-
-    CPlayerGlobalContext& context = CPlayerGlobalContext::GetInstance();
-    if (!context.IsInitialized())
-    {
-        HRESULT hr = context.Initialize();
-        if (FAILED(hr))
-            return hr;
-    }
-
     return CPlayerManager::Instance().CreatePlayer(playbackWndHandle, playerInstance);
 }
 

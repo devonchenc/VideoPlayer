@@ -2,7 +2,7 @@
 
 #include <D3DCompiler.h>
 #include "PlayerGlobalContext.h"
-#include "Utility.h"
+#include "ResourceUtils.h"
 
 #pragma comment(lib, "D3DCompiler.lib")
 
@@ -257,10 +257,10 @@ HRESULT CD3D12Renderer::Render()
     return hr;
 }
 
-void CD3D12Renderer::Clear()
+HRESULT CD3D12Renderer::Clear()
 {
     if (!m_swapChain)
-        return;
+        return E_FAIL;
 
     const UINT backBufferIndex = m_swapChain->GetCurrentBackBufferIndex();
     FrameContext& frame = m_frames[backBufferIndex];
@@ -270,7 +270,7 @@ void CD3D12Renderer::Clear()
     if (FAILED(hr))
     {
         OutputDebugStringW(L"Wait for frame failed\n");
-        return;
+        return hr;
     }
 
     // Reset command allocator
@@ -278,13 +278,13 @@ void CD3D12Renderer::Clear()
     if (FAILED(hr))
     {
         OutputDebugStringW(L"Command allocator reset failed\n");
-        return;
+        return hr;
     }
 
     // Reset command list
     hr = m_renderCommandList->Reset(frame.commandAllocator.Get(), nullptr);
     if (FAILED(hr))
-        return;
+        return hr;
 
     ComPtr<ID3D12Resource>& backBuffer = m_renderTargets[backBufferIndex];
 
@@ -314,7 +314,7 @@ void CD3D12Renderer::Clear()
     if (FAILED(hr))
     {
         OutputDebugStringW(L"CommandList Close failed\n");
-        return;
+        return hr;
     }
 
     // Execute command list
@@ -329,8 +329,10 @@ void CD3D12Renderer::Clear()
     if (FAILED(hr))
     {
         OutputDebugStringW(L"Present failed\n");
-        return;
+        return hr;
     }
+
+    return S_OK;
 }
 
 void CD3D12Renderer::Shutdown()

@@ -10,7 +10,7 @@
 #include <vector>
 #define NOMINMAX
 #include <Windows.h>
-#include "Utility.h"
+#include "ResourceUtils.h"
 #include "BlockingQueue.h"
 
 struct PlayerConfig

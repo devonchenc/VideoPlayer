@@ -42,9 +42,6 @@
     <ClInclude Include="Resource.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="PlayerWindowProc.h">
-      <Filter>Player</Filter>
-    </ClInclude>
     <ClInclude Include="PlayerGlobalContext.h">
       <Filter>Player</Filter>
     </ClInclude>
@@ -66,7 +63,13 @@
     <ClInclude Include="PlaybackEngine.h">
       <Filter>Player</Filter>
     </ClInclude>
-    <ClInclude Include="Utility.h">
+    <ClInclude Include="ResourceUtils.h">
+      <Filter>Player</Filter>
+    </ClInclude>
+    <ClInclude Include="IRenderer.h">
+      <Filter>Player</Filter>
+    </ClInclude>
+    <ClInclude Include="GdiRenderer.h">
       <Filter>Player</Filter>
     </ClInclude>
   </ItemGroup>
@@ -89,9 +92,6 @@
     <ClCompile Include="PlayerGlobalContext.cpp">
       <Filter>Player</Filter>
     </ClCompile>
-    <ClCompile Include="PlayerWindowProc.cpp">
-      <Filter>Player</Filter>
-    </ClCompile>
     <ClCompile Include="Interface.cpp">
       <Filter>Player</Filter>
     </ClCompile>
@@ -102,6 +102,9 @@
       <Filter>Player</Filter>
     </ClCompile>
     <ClCompile Include="PlaybackEngine.cpp">
+      <Filter>Player</Filter>
+    </ClCompile>
+    <ClCompile Include="GdiRenderer.cpp">
       <Filter>Player</Filter>
     </ClCompile>
   </ItemGroup>

@@ -3,25 +3,24 @@
 #include <condition_variable>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <queue>
 #include <thread>
-#include "D3D12Renderer.h"
-#include "PlaybackEngine.h"
+#include <Windows.h>
+#include "ResourceUtils.h"
+
+class IRenderer;
+class CPlaybackEngine;
 
 enum class PlayerCommandType
 {
     Resize,
-    Play,
-    Pause,
-    Resume,
-    Stop,
     Clear
 };
 
 struct PlayerCommand
 {
-    PlayerCommandType type{ PlayerCommandType::Pause };
-
+    PlayerCommandType type{ PlayerCommandType::Clear };
     UINT width{ 0 };
     UINT height{ 0 };
 };
@@ -79,7 +78,7 @@ private:
     HWND m_hwnd{ nullptr };
     RECT m_windowPos{};
     bool m_initialized{ false };
-    std::unique_ptr<CD3D12Renderer> m_renderer;
+    std::unique_ptr<IRenderer> m_renderer;
     std::unique_ptr<CPlaybackEngine> m_playbackEngine;
 
     std::optional<VideoFrame> m_pendingVideoFrame;

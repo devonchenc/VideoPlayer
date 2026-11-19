@@ -8,13 +8,12 @@
 #include <wrl/client.h>
 #include <dxgi1_6.h>
 #include <d3d12.h>
+#include "IRenderer.h"
 
 #pragma comment(lib, "d3d12.lib")
 #pragma comment(lib, "dxgi.lib")
 
 using Microsoft::WRL::ComPtr;
-
-struct AVFrame;
 
 struct FrameContext
 {
@@ -27,14 +26,14 @@ namespace
     constexpr UINT FRAME_COUNT = 2;
 }
 
-class CD3D12Renderer
+class CD3D12Renderer : public IRenderer
 {
 public:
     HRESULT Initialize(HWND hwnd);
     HRESULT Resize(UINT width, UINT height);
     HRESULT UploadVideoFrame(AVFrame* frame);
     HRESULT Render();
-    void Clear();
+    HRESULT Clear();
     void Shutdown();
     HANDLE GetFrameLatencyWaitableObject() const { return m_frameLatencyWaitableObject; }
 

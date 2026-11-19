@@ -1,5 +1,8 @@
 #include "PlayerInstance.h"
-#include "Utility.h"
+#include "PlayerGlobalContext.h"
+#include "D3D12Renderer.h"
+#include "GdiRenderer.h"
+#include "PlaybackEngine.h"
 
 namespace
 {
@@ -9,14 +12,19 @@ namespace
 
 CPlayerInstance::CPlayerInstance()
 {
-    m_renderer = std::make_unique<CD3D12Renderer>();
-    m_playbackEngine = std::make_unique<CPlaybackEngine>();
 }
 
 CPlayerInstance::~CPlayerInstance()
 {
     StopRendering();
     m_renderer->Shutdown();
+
+    if (m_initialized)
+    {
+        CloseHandle(m_commandEvent);
+        CloseHandle(m_stopEvent);
+        CloseHandle(m_renderTimer);
+    }
 
     if (m_hwnd)
     {
@@ -31,6 +39,17 @@ HRESULT CPlayerInstance::Initialize(HWND parentWnd)
 
     if (m_initialized)
         return S_OK;
+
+    if (CPlayerGlobalContext::GetInstance().IsD3D12Available())
+    {
+        m_renderer = std::make_unique<CD3D12Renderer>();
+    }
+    else
+    {
+        m_renderer = std::make_unique<CGdiRenderer>();
+    }
+
+    m_playbackEngine = std::make_unique<CPlaybackEngine>();
 
     // Create child window
     m_hwnd = CreateWindowExW(0, L"VideoPlayerWindow", nullptr, WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS, 0, 0, 0, 0,
@@ -98,10 +117,10 @@ HRESULT CPlayerInstance::GetWindowPos(RECT* windowPos)
 
 HRESULT CPlayerInstance::PlayLive(long cameraNumber, long playSpeed)
 {
-    //const std::string url = "qable-sample-720p-10s.mp4";
-    //m_playbackEngine->PlayRecorded(url);
-    const std::string url = "rtsp://127.0.0.1:8554/test";
-    m_playbackEngine->PlayLive(url);
+    const std::string url = "qable-sample-720p-10s.mp4";
+    m_playbackEngine->PlayRecorded(url);
+    //const std::string url = "rtsp://127.0.0.1:8554/test";
+    //m_playbackEngine->PlayLive(url);
 
     return S_OK;
 }
