@@ -63,7 +63,8 @@ struct SwsDeleter
 {
     void operator()(SwsContext* p) const
     {
-        if (p) sws_freeContext(p);
+        if (p)
+            sws_freeContext(p);
     }
 };
 
