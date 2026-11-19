@@ -7,8 +7,6 @@
 class CGdiRenderer : public IRenderer
 {
 public:
-    virtual ~CGdiRenderer() = default;
-
     virtual HRESULT Initialize(HWND hwnd);
     virtual HRESULT Resize(UINT width, UINT height);
     virtual HRESULT UploadVideoFrame(AVFrame* frame);

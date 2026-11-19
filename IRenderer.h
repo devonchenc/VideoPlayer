@@ -10,6 +10,7 @@ class IRenderer
 public:
     virtual ~IRenderer() = default;
 
+public:
     virtual HRESULT Initialize(HWND hwnd) = 0;
     virtual HRESULT Resize(UINT width, UINT height) = 0;
     virtual HRESULT UploadVideoFrame(AVFrame* frame) = 0;

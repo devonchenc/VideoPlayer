@@ -119,5 +119,5 @@ HRESULT CGdiRenderer::Clear()
 
 void CGdiRenderer::Shutdown()
 {
-
+    m_videoBuffer.clear();
 }
