@@ -3,12 +3,12 @@
 #include <array>
 #include <cstdint>
 #include <mutex>
-
+#define NOMINMAX
 #include <Windows.h>
 #include <wrl/client.h>
 #include <dxgi1_6.h>
 #include <d3d12.h>
-#include "Utility.h"
+#include "IRenderer.h"
 
 #pragma comment(lib, "d3d12.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -21,45 +21,36 @@ struct FrameContext
     UINT64 fenceValue{ 0 };
 };
 
-struct PlaneUploadInfo
-{
-    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
-    UINT numRows{ 0 };
-    UINT64 rowSize{ 0 };
-    UINT64 totalBytes{ 0 };
-};
-
 namespace
 {
     constexpr UINT FRAME_COUNT = 2;
 }
 
-class CD3D12Renderer
+class CD3D12Renderer : public IRenderer
 {
 public:
     HRESULT Initialize(HWND hwnd);
     HRESULT Resize(UINT width, UINT height);
-    void Shutdown();
     HRESULT UploadVideoFrame(AVFrame* frame);
     HRESULT Render();
-    void Clear();
+    HRESULT Clear();
+    void Shutdown();
     HANDLE GetFrameLatencyWaitableObject() const { return m_frameLatencyWaitableObject; }
 
 private:
-    HRESULT InitializeSwapChain(UINT width, UINT height);
     HRESULT CreateCommandObjects();
     HRESULT CreateFence();
+    HRESULT InitializeSwapChain(UINT width, UINT height);
     HRESULT CreateSwapChain(HWND hwnd);
     HRESULT CreateRenderTargetViews();
     HRESULT CreateRootSignature();
     HRESULT CreatePipelineState();
     HRESULT CompileShader(const std::wstring& filename, const char* entryPoint, const char* target, ComPtr<ID3DBlob>& shaderBlob);
     HRESULT CreateVideoSrvHeap();
-    void CreateVideoSrvs();
-    HRESULT CreateVideoTextures(UINT width, UINT height);
-    HRESULT CreatePlaneTexture(UINT width, UINT height, DXGI_FORMAT format, ComPtr<ID3D12Resource>& texture);
+    void CreateVideoSrv();
+    HRESULT CreateVideoTexture(UINT width, UINT height);
     HRESULT CreateUploadBuffer(UINT64 size, ComPtr<ID3D12Resource>& buffer);
-    PlaneUploadInfo GetPlaneUploadInfo(UINT width, UINT height);
+    D3D12_VIEWPORT CalculateViewport();
     HRESULT CopyVideoPlanesToGpu();
     HRESULT WaitForFence(UINT64 fenceValue);
     HRESULT WaitForGpu();
@@ -85,27 +76,19 @@ private:
     HANDLE m_fenceEvent{ nullptr };
     HANDLE m_frameLatencyWaitableObject{ nullptr };
 
-    UINT m_width{ 0 };
-    UINT m_height{ 0 };
+    UINT m_windowWidth{ 0 };
+    UINT m_windowHeight{ 0 };
     UINT m_rtvDescriptorSize{ 0 };
 
     UINT m_videoWidth{ 0 };
     UINT m_videoHeight{ 0 };
-    ComPtr<ID3D12Resource> m_yTexture;
-    ComPtr<ID3D12Resource> m_uTexture;
-    ComPtr<ID3D12Resource> m_vTexture;
 
-    ComPtr<ID3D12Resource> m_yUploadBuffer;
-    ComPtr<ID3D12Resource> m_uUploadBuffer;
-    ComPtr<ID3D12Resource> m_vUploadBuffer;
-
-    PlaneUploadInfo m_yUploadInfo;
-    PlaneUploadInfo m_uUploadInfo;
-    PlaneUploadInfo m_vUploadInfo;
-
-    UINT m_yRowPitch{ 0 };
-    UINT m_uRowPitch{ 0 };
-    UINT m_vRowPitch{ 0 };
+    // Texture
+    ComPtr<ID3D12Resource> m_videoTexture;
+    ComPtr<ID3D12Resource> m_videoUploadBuffer;
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT m_videoFootprint{};
+    UINT64 m_videoUploadBufferSize{ 0 };
+    D3D12_CPU_DESCRIPTOR_HANDLE m_videoTextureSrvHandle{};
 
     ComPtr<ID3D12CommandAllocator> m_uploadCommandAllocator;
     ComPtr<ID3D12GraphicsCommandList> m_uploadCommandList;
@@ -114,7 +97,6 @@ private:
 
     // Video Texture SRVs
     ComPtr<ID3D12DescriptorHeap> m_videoSrvHeap;
-    UINT m_srvDescriptorSize{ 0 };
 
     ComPtr<ID3D12RootSignature> m_rootSignature;
     ComPtr<ID3D12PipelineState> m_pipelineState;

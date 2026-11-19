@@ -2,34 +2,9 @@
 
 #include <D3DCompiler.h>
 #include "PlayerGlobalContext.h"
+#include "ResourceUtils.h"
 
 #pragma comment(lib, "D3DCompiler.lib")
-
-namespace
-{
-    void CopyPlane(BYTE* dst, UINT dstRowPitch, const BYTE* src, int srcLinesize, UINT rowSize, UINT height)
-    {
-        for (UINT y = 0; y < height; ++y)
-        {
-            memcpy(dst + static_cast<size_t>(y) * dstRowPitch, src + static_cast<ptrdiff_t>(y) * srcLinesize, rowSize);
-        }
-    }
-
-    void CopyPlaneToTexture(ID3D12GraphicsCommandList* commandList, ID3D12Resource* uploadBuffer, ID3D12Resource* texture, const D3D12_PLACED_SUBRESOURCE_FOOTPRINT& footprint)
-    {
-        D3D12_TEXTURE_COPY_LOCATION src{};
-        src.pResource = uploadBuffer;
-        src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-        src.PlacedFootprint = footprint;
-
-        D3D12_TEXTURE_COPY_LOCATION dst{};
-        dst.pResource = texture;
-        dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-        dst.SubresourceIndex = 0;
-
-        commandList->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
-    }
-}
 
 HRESULT CD3D12Renderer::Initialize(HWND hwnd)
 {
@@ -70,7 +45,7 @@ HRESULT CD3D12Renderer::Resize(UINT width, UINT height)
     if (!m_swapChain)
         return InitializeSwapChain(width, height);
 
-    if (width == m_width && height == m_height)
+    if (width == m_windowWidth && height == m_windowHeight)
         return S_OK;
 
     // Wait until the GPU finishes using the old buffers
@@ -87,8 +62,8 @@ HRESULT CD3D12Renderer::Resize(UINT width, UINT height)
     if (FAILED(hr))
         return hr;
 
-    m_width = width;
-    m_height = height;
+    m_windowWidth = width;
+    m_windowHeight = height;
 
     // Recreate render target views.
     hr = CreateRenderTargetViews();
@@ -96,6 +71,267 @@ HRESULT CD3D12Renderer::Resize(UINT width, UINT height)
         return hr;
 
     // Recreate render target views
+    return S_OK;
+}
+
+HRESULT CD3D12Renderer::UploadVideoFrame(AVFrame* frame)
+{
+    if (!frame)
+        return E_INVALIDARG;
+
+    if (frame->format != AV_PIX_FMT_BGRA)
+        return E_INVALIDARG;
+
+    const UINT videoWidth = frame->width;
+    const UINT videoHeight = frame->height;
+
+    if (videoWidth == 0 || videoHeight == 0)
+        return E_INVALIDARG;
+
+    if (!frame->data[0])
+        return E_INVALIDARG;
+
+    if (frame->linesize[0] < static_cast<int>(videoWidth * 4))
+        return E_INVALIDARG;
+
+    // 1. Recreate resources if video format or size changes
+    if (!m_videoTexture || m_videoWidth != videoWidth || m_videoHeight != videoHeight)
+    {
+        // Wait for previous GPU usage before releasing old textures
+        const UINT backBufferIndex = m_swapChain->GetCurrentBackBufferIndex();
+        FrameContext& frameContext = m_frames[backBufferIndex];
+
+        HRESULT hr;
+        if (frameContext.fenceValue != 0)
+        {
+            hr = WaitForFence(frameContext.fenceValue);
+            if (FAILED(hr))
+                return hr;
+        }
+
+        hr = CreateVideoTexture(videoWidth, videoHeight);
+        if (FAILED(hr))
+            return hr;
+
+        CreateVideoSrv();
+
+        m_videoWidth = videoWidth;
+        m_videoHeight = videoHeight;
+    }
+
+    HRESULT hr;
+    // 2. Wait until previous GPU usage has completed
+    if (m_uploadFenceValue != 0)
+    {
+        hr = WaitForFence(m_uploadFenceValue);
+        if (FAILED(hr))
+            return hr;
+    }
+
+    // 3. Map upload buffers
+    void* mappedData = nullptr;
+    D3D12_RANGE readRange{ 0, 0 };
+    hr = m_videoUploadBuffer->Map(0, &readRange, reinterpret_cast<void**>(&mappedData));
+    if (FAILED(hr))
+        return hr;
+
+    // 4. Copy BGRA pixels row by row
+    const UINT rowSize = videoWidth * 4;
+    uint8_t* dst = static_cast<uint8_t*>(mappedData);
+    const uint8_t* src = frame->data[0];
+
+    for (UINT y = 0; y < videoHeight; ++y)
+    {
+        memcpy(dst + y * m_videoFootprint.Footprint.RowPitch, src + y * frame->linesize[0], rowSize);
+    }
+
+    // 5. Unmap the upload buffer
+    const D3D12_RANGE writtenRange = { 0, static_cast<SIZE_T>(m_videoUploadBufferSize) };
+    m_videoUploadBuffer->Unmap(0, &writtenRange);
+
+    // 6. Copy upload buffers to GPU textures
+    return CopyVideoPlanesToGpu();
+}
+
+HRESULT CD3D12Renderer::Render()
+{
+    if (!m_swapChain || !m_pipelineState)
+        return E_UNEXPECTED;
+
+    if (!m_videoTexture)
+        return S_FALSE;
+
+    // 1. Get current back buffer
+    const UINT backBufferIndex = m_swapChain->GetCurrentBackBufferIndex();
+    FrameContext& frame = m_frames[backBufferIndex];
+
+    HRESULT hr;
+    // 2. Wait for previous rendering to complete
+    if (frame.fenceValue != 0)
+    {
+        hr = WaitForFence(frame.fenceValue);
+        if (FAILED(hr))
+            return hr;
+    }
+
+    // 3. Reset command allocator and command list
+    hr = frame.commandAllocator->Reset();
+    if (FAILED(hr))
+        return hr;
+
+    hr = m_renderCommandList->Reset(frame.commandAllocator.Get(), m_pipelineState.Get());
+    if (FAILED(hr))
+        return hr;
+
+    ComPtr<ID3D12Resource>& backBuffer = m_renderTargets[backBufferIndex];
+
+    // 4. Transition PRESENT -> RENDER_TARGET
+    D3D12_RESOURCE_BARRIER barrier{};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier.Transition.pResource = backBuffer.Get();
+    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+
+    m_renderCommandList->ResourceBarrier(1, &barrier);
+
+    // 5. Set render target
+    D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
+    rtvHandle.ptr += static_cast<SIZE_T>(backBufferIndex) * m_rtvDescriptorSize;
+    m_renderCommandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
+
+    // 6. Set viewport and scissor rect
+    D3D12_VIEWPORT viewport = CalculateViewport();
+    m_renderCommandList->RSSetViewports(1, &viewport);
+
+    D3D12_RECT scissorRect{};
+    scissorRect.left = 0;
+    scissorRect.top = 0;
+    scissorRect.right = static_cast<LONG>(m_windowWidth);
+    scissorRect.bottom = static_cast<LONG>(m_windowHeight);
+
+    m_renderCommandList->RSSetScissorRects(1, &scissorRect);
+
+    // 7. Clear render target
+    const float clearColor[] = { 0.0f, 0.0f, 0.0f, 1.0f };
+    m_renderCommandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
+
+    // 8. Bind pipeline and root signature
+    m_renderCommandList->SetGraphicsRootSignature(m_rootSignature.Get());
+    m_renderCommandList->SetPipelineState(m_pipelineState.Get());
+
+    // 9. Bind video SRV descriptor heap
+    ID3D12DescriptorHeap* descriptorHeaps[] = { m_videoSrvHeap.Get() };
+    m_renderCommandList->SetDescriptorHeaps(1, descriptorHeaps);
+
+    // 10. Bind SRV descriptor table
+    m_renderCommandList->SetGraphicsRootDescriptorTable(0, m_videoSrvHeap->GetGPUDescriptorHandleForHeapStart());
+
+    // 11. Draw fullscreen triangle
+    m_renderCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+    m_renderCommandList->DrawInstanced(3, 1, 0, 0);
+
+    // 12. Transition RENDER_TARGET -> PRESENT
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
+
+    m_renderCommandList->ResourceBarrier(1, &barrier);
+
+    // 13. Close command list
+    hr = m_renderCommandList->Close();
+    if (FAILED(hr))
+        return hr;
+
+    // 14. Execute command list
+    ID3D12CommandList* commandLists[] = { m_renderCommandList.Get() };
+
+    m_commandQueue->ExecuteCommandLists(1, commandLists);
+
+    // 15. Present
+    hr = m_swapChain->Present(1, 0);
+
+    // 16. Signal GPU fence
+    frame.fenceValue = SignalGpu();
+
+    return hr;
+}
+
+HRESULT CD3D12Renderer::Clear()
+{
+    if (!m_swapChain)
+        return E_FAIL;
+
+    const UINT backBufferIndex = m_swapChain->GetCurrentBackBufferIndex();
+    FrameContext& frame = m_frames[backBufferIndex];
+
+    // Wait until previous GPU work is completed
+    HRESULT hr = WaitForFence(frame.fenceValue);
+    if (FAILED(hr))
+    {
+        OutputDebugStringW(L"Wait for frame failed\n");
+        return hr;
+    }
+
+    // Reset command allocator
+    hr = frame.commandAllocator->Reset();
+    if (FAILED(hr))
+    {
+        OutputDebugStringW(L"Command allocator reset failed\n");
+        return hr;
+    }
+
+    // Reset command list
+    hr = m_renderCommandList->Reset(frame.commandAllocator.Get(), nullptr);
+    if (FAILED(hr))
+        return hr;
+
+    ComPtr<ID3D12Resource>& backBuffer = m_renderTargets[backBufferIndex];
+
+    // Transition: PRESENT -> RENDER_TARGET
+    D3D12_RESOURCE_BARRIER barrier{};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+    barrier.Transition.pResource = backBuffer.Get();
+    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+
+    m_renderCommandList->ResourceBarrier(1, &barrier);
+
+    // Clear render target to black
+    constexpr float clearColor[] = { 0.0f, 0.0f, 0.0f, 1.0f };
+    m_renderCommandList->ClearRenderTargetView(m_rtvHandles[backBufferIndex], clearColor, 0, nullptr);
+
+    // Transition: RENDER_TARGET -> PRESENT
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
+
+    m_renderCommandList->ResourceBarrier(1, &barrier);
+
+    // Close command list
+    hr = m_renderCommandList->Close();
+    if (FAILED(hr))
+    {
+        OutputDebugStringW(L"CommandList Close failed\n");
+        return hr;
+    }
+
+    // Execute command list
+    ID3D12CommandList* commandLists[] = { m_renderCommandList.Get() };
+    m_commandQueue->ExecuteCommandLists(1, commandLists);
+
+    // Signal GPU completion for this frame
+    frame.fenceValue = SignalGpu();
+
+    // Present
+    hr = m_swapChain->Present(1, 0);
+    if (FAILED(hr))
+    {
+        OutputDebugStringW(L"Present failed\n");
+        return hr;
+    }
+
     return S_OK;
 }
 
@@ -172,7 +408,7 @@ HRESULT CD3D12Renderer::CreateFence()
     if (FAILED(hr))
         return hr;
 
-    m_fenceEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    m_fenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
     if (!m_fenceEvent)
         return HRESULT_FROM_WIN32(GetLastError());
 
@@ -184,8 +420,8 @@ HRESULT CD3D12Renderer::InitializeSwapChain(UINT width, UINT height)
     if (width == 0 || height == 0)
         return E_INVALIDARG;
 
-    m_width = width;
-    m_height = height;
+    m_windowWidth = width;
+    m_windowHeight = height;
 
     HRESULT hr = CreateSwapChain(m_hwnd);
     if (FAILED(hr))
@@ -205,8 +441,8 @@ HRESULT CD3D12Renderer::InitializeSwapChain(UINT width, UINT height)
 HRESULT CD3D12Renderer::CreateSwapChain(HWND hwnd)
 {
     DXGI_SWAP_CHAIN_DESC1 desc{};
-    desc.Width = m_width;
-    desc.Height = m_height;
+    desc.Width = m_windowWidth;
+    desc.Height = m_windowHeight;
     desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     desc.Stereo = FALSE;
     desc.SampleDesc.Count = 1;
@@ -278,540 +514,6 @@ HRESULT CD3D12Renderer::CreateRenderTargetViews()
     return S_OK;
 }
 
-HRESULT CD3D12Renderer::WaitForFence(UINT64 fenceValue)
-{
-    if (m_fence->GetCompletedValue() >= fenceValue)
-        return S_OK;
-
-    HRESULT hr = m_fence->SetEventOnCompletion(fenceValue, m_fenceEvent);
-    if (FAILED(hr))
-        return hr;
-
-    DWORD result = WaitForSingleObject(m_fenceEvent, INFINITE);
-    if (result != WAIT_OBJECT_0)
-        return HRESULT_FROM_WIN32(result == WAIT_FAILED ? GetLastError() : ERROR_GEN_FAILURE);
-
-    return S_OK;
-}
-
-HRESULT CD3D12Renderer::WaitForGpu()
-{
-    if (!m_commandQueue || !m_fence)
-        return E_FAIL;
-
-    const UINT64 fenceValue = ++m_nextFenceValue;
-
-    HRESULT hr = m_commandQueue->Signal(m_fence.Get(), fenceValue);
-    if (FAILED(hr))
-        return hr;
-
-    if (m_fence->GetCompletedValue() < fenceValue)
-    {
-        hr = m_fence->SetEventOnCompletion(fenceValue, m_fenceEvent);
-        if (FAILED(hr))
-            return hr;
-
-        const DWORD waitResult = WaitForSingleObject(m_fenceEvent, INFINITE);
-
-        if (waitResult != WAIT_OBJECT_0)
-            return HRESULT_FROM_WIN32(waitResult == WAIT_FAILED ? GetLastError() : ERROR_GEN_FAILURE);
-    }
-
-    return S_OK;
-}
-
-HRESULT CD3D12Renderer::UploadVideoFrame(AVFrame* frame)
-{
-    if (!frame)
-        return E_INVALIDARG;
-
-    if (frame->format != AV_PIX_FMT_YUV420P && frame->format != AV_PIX_FMT_YUVJ420P)
-        return E_NOTIMPL;
-
-    const UINT videoWidth = frame->width;
-    const UINT videoHeight = frame->height;
-
-    if (videoWidth == 0 || videoHeight == 0)
-        return E_INVALIDARG;
-
-    const UINT chromaWidth = (videoWidth + 1) / 2;
-    const UINT chromaHeight = (videoHeight + 1) / 2;
-
-    // 1. Recreate resources if video format or size changes
-    if (m_videoWidth != videoWidth || m_videoHeight != videoHeight)
-    {
-        // Wait for previous GPU usage before releasing old textures
-        const UINT backBufferIndex = m_swapChain->GetCurrentBackBufferIndex();
-        FrameContext& frame = m_frames[backBufferIndex];
-
-        HRESULT hr;
-        if (frame.fenceValue != 0)
-        {
-            hr = WaitForFence(frame.fenceValue);
-            if (FAILED(hr))
-                return hr;
-        }
-
-        hr = CreateVideoTextures(videoWidth, videoHeight);
-        if (FAILED(hr))
-            return hr;
-
-        CreateVideoSrvs();
-
-        m_videoWidth = videoWidth;
-        m_videoHeight = videoHeight;
-    }
-
-    HRESULT hr;
-    // 2. Wait until previous GPU usage has completed
-    if (m_uploadFenceValue != 0)
-    {
-        hr = WaitForFence(m_uploadFenceValue);
-        if (FAILED(hr))
-            return hr;
-    }
-
-    // 3. Map upload buffers.
-    BYTE* yMapped = nullptr;
-    BYTE* uMapped = nullptr;
-    BYTE* vMapped = nullptr;
-
-    D3D12_RANGE readRange{ 0, 0 };
-
-    hr = m_yUploadBuffer->Map(0, &readRange, reinterpret_cast<void**>(&yMapped));
-    if (FAILED(hr))
-        return hr;
-
-    hr = m_uUploadBuffer->Map(0, &readRange, reinterpret_cast<void**>(&uMapped));
-    if (FAILED(hr))
-    {
-        m_yUploadBuffer->Unmap(0, nullptr);
-        return hr;
-    }
-
-    hr = m_vUploadBuffer->Map(0, &readRange, reinterpret_cast<void**>(&vMapped));
-    if (FAILED(hr))
-    {
-        m_yUploadBuffer->Unmap(0, nullptr);
-        m_uUploadBuffer->Unmap(0, nullptr);
-        return hr;
-    }
-
-    // 4. Copy AVFrame data to upload buffers
-    CopyPlane(yMapped, m_yRowPitch, frame->data[0], frame->linesize[0], videoWidth, videoHeight);
-    CopyPlane(uMapped, m_uRowPitch, frame->data[1], frame->linesize[1], chromaWidth, chromaHeight);
-    CopyPlane(vMapped, m_vRowPitch, frame->data[2], frame->linesize[2], chromaWidth, chromaHeight);
-
-    // 5. Unmap upload buffers
-    m_yUploadBuffer->Unmap(0, nullptr);
-    m_uUploadBuffer->Unmap(0, nullptr);
-    m_vUploadBuffer->Unmap(0, nullptr);
-
-    // 6. Copy upload buffers to GPU textures
-    return CopyVideoPlanesToGpu();
-}
-
-HRESULT CD3D12Renderer::Render()
-{
-    if (!m_swapChain || !m_pipelineState)
-        return E_UNEXPECTED;
-
-    if (!m_yTexture || !m_uTexture || !m_vTexture)
-        return S_FALSE;
-
-    // 1. Get current back buffer.
-    const UINT backBufferIndex = m_swapChain->GetCurrentBackBufferIndex();
-    FrameContext& frame = m_frames[backBufferIndex];
-
-    HRESULT hr;
-    // 2. Wait for previous rendering to complete
-    if (frame.fenceValue != 0)
-    {
-        hr = WaitForFence(frame.fenceValue);
-        if (FAILED(hr))
-            return hr;
-    }
-
-    // 3. Reset command allocator and command list
-    hr = frame.commandAllocator->Reset();
-    if (FAILED(hr))
-        return hr;
-
-    hr = m_renderCommandList->Reset(frame.commandAllocator.Get(), m_pipelineState.Get());
-    if (FAILED(hr))
-        return hr;
-
-    ComPtr<ID3D12Resource>& backBuffer = m_renderTargets[backBufferIndex];
-
-    // 4. Transition PRESENT -> RENDER_TARGET
-    D3D12_RESOURCE_BARRIER barrier{};
-    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier.Transition.pResource = backBuffer.Get();
-    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
-    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
-
-    m_renderCommandList->ResourceBarrier(1, &barrier);
-
-    // 5. Set render target
-    D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
-
-    rtvHandle.ptr += static_cast<SIZE_T>(backBufferIndex) * m_rtvDescriptorSize;
-
-    m_renderCommandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
-
-    // 6. Set viewport and scissor rect
-    D3D12_VIEWPORT viewport{};
-    viewport.TopLeftX = 0.0f;
-    viewport.TopLeftY = 0.0f;
-    viewport.Width = static_cast<float>(m_width);
-    viewport.Height = static_cast<float>(m_height);
-    viewport.MinDepth = 0.0f;
-    viewport.MaxDepth = 1.0f;
-
-    D3D12_RECT scissorRect{};
-    scissorRect.left = 0;
-    scissorRect.top = 0;
-    scissorRect.right = static_cast<LONG>(m_width);
-    scissorRect.bottom = static_cast<LONG>(m_height);
-
-    m_renderCommandList->RSSetViewports(1, &viewport);
-    m_renderCommandList->RSSetScissorRects(1, &scissorRect);
-
-    // 7. Clear render target
-    const float clearColor[] = { 0.0f, 0.0f, 0.0f, 1.0f };
-    m_renderCommandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
-
-    // 8. Bind pipeline and root signature
-    m_renderCommandList->SetGraphicsRootSignature(m_rootSignature.Get());
-
-    m_renderCommandList->SetPipelineState(m_pipelineState.Get());
-
-    // 9. Bind video SRV descriptor heap
-    ID3D12DescriptorHeap* descriptorHeaps[] = { m_videoSrvHeap.Get() };
-
-    m_renderCommandList->SetDescriptorHeaps(1, descriptorHeaps);
-
-    // 10. Bind SRV descriptor table
-    m_renderCommandList->SetGraphicsRootDescriptorTable(0, m_videoSrvHeap->GetGPUDescriptorHandleForHeapStart());
-
-    // 11. Draw fullscreen triangle
-    m_renderCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-
-    m_renderCommandList->DrawInstanced(3, 1, 0, 0);
-
-    // 12. Transition RENDER_TARGET -> PRESENT
-    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
-    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
-
-    m_renderCommandList->ResourceBarrier(1, &barrier);
-
-    // 13. Close command list
-    hr = m_renderCommandList->Close();
-    if (FAILED(hr))
-        return hr;
-
-    // 14. Execute command list
-    ID3D12CommandList* commandLists[] = { m_renderCommandList.Get() };
-
-    m_commandQueue->ExecuteCommandLists(1, commandLists);
-
-    // 15. Present
-    hr = m_swapChain->Present(1, 0);
-
-    // 16. Signal GPU fence
-    frame.fenceValue = SignalGpu();
-
-    return hr;
-}
-
-void CD3D12Renderer::Clear()
-{
-    if (!m_swapChain)
-        return;
-
-    const UINT backBufferIndex = m_swapChain->GetCurrentBackBufferIndex();
-    FrameContext& frame = m_frames[backBufferIndex];
-
-    // Wait until previous GPU work is completed
-    HRESULT hr = WaitForFence(frame.fenceValue);
-    if (FAILED(hr))
-    {
-        OutputDebugStringW(L"Wait for frame failed\n");
-        return;
-    }
-
-    // Reset command allocator
-    hr = frame.commandAllocator->Reset();
-    if (FAILED(hr))
-    {
-        OutputDebugStringW(L"Command allocator reset failed\n");
-        return;
-    }
-
-    // Reset command list
-    hr = m_renderCommandList->Reset(frame.commandAllocator.Get(), nullptr);
-    if (FAILED(hr))
-        return;
-
-    ComPtr<ID3D12Resource>& backBuffer = m_renderTargets[backBufferIndex];
-
-    // Transition: PRESENT -> RENDER_TARGET
-    D3D12_RESOURCE_BARRIER barrier{};
-    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-    barrier.Transition.pResource = backBuffer.Get();
-    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
-    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
-
-    m_renderCommandList->ResourceBarrier(1, &barrier);
-
-    // Clear render target to black
-    constexpr float clearColor[] = { 0.0f, 0.0f, 0.0f, 1.0f };
-    m_renderCommandList->ClearRenderTargetView(m_rtvHandles[backBufferIndex], clearColor, 0, nullptr);
-
-    // Transition: RENDER_TARGET -> PRESENT
-    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
-    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
-
-    m_renderCommandList->ResourceBarrier(1, &barrier);
-
-    // Close command list
-    hr = m_renderCommandList->Close();
-    if (FAILED(hr))
-    {
-        OutputDebugStringW(L"CommandList Close failed\n");
-        return;
-    }
-
-    // Execute command list
-    ID3D12CommandList* commandLists[] = { m_renderCommandList.Get() };
-    m_commandQueue->ExecuteCommandLists(1, commandLists);
-
-    // Signal GPU completion for this frame
-    frame.fenceValue = SignalGpu();
-
-    // Present
-    hr = m_swapChain->Present(1, 0);
-    if (FAILED(hr))
-    {
-        OutputDebugStringW(L"Present failed\n");
-        return;
-    }
-}
-
-HRESULT CD3D12Renderer::CreateVideoTextures(UINT width, UINT height)
-{
-    const UINT chromaWidth = (width + 1) / 2;
-    const UINT chromaHeight = (height + 1) / 2;
-
-    HRESULT hr = CreatePlaneTexture(width, height, DXGI_FORMAT_R8_UNORM, m_yTexture);
-    if (FAILED(hr))
-        return hr;
-
-    hr = CreatePlaneTexture(chromaWidth, chromaHeight, DXGI_FORMAT_R8_UNORM, m_uTexture);
-    if (FAILED(hr))
-        return hr;
-
-    hr = CreatePlaneTexture(chromaWidth, chromaHeight, DXGI_FORMAT_R8_UNORM, m_vTexture);
-    if (FAILED(hr))
-        return hr;
-
-    m_yUploadInfo = GetPlaneUploadInfo(width, height);
-    m_uUploadInfo = GetPlaneUploadInfo(chromaWidth, chromaHeight);
-    m_vUploadInfo = GetPlaneUploadInfo(chromaWidth, chromaHeight);
-    
-    m_yRowPitch = m_yUploadInfo.footprint.Footprint.RowPitch;
-    m_uRowPitch = m_uUploadInfo.footprint.Footprint.RowPitch;
-    m_vRowPitch = m_vUploadInfo.footprint.Footprint.RowPitch;
-
-    hr = CreateUploadBuffer(m_yUploadInfo.totalBytes, m_yUploadBuffer);
-    if (FAILED(hr))
-        return hr;
-
-    hr = CreateUploadBuffer(m_uUploadInfo.totalBytes, m_uUploadBuffer);
-    if (FAILED(hr))
-        return hr;
-
-    hr = CreateUploadBuffer(m_vUploadInfo.totalBytes, m_vUploadBuffer);
-    if (FAILED(hr))
-        return hr;
-
-    m_videoTexturesInShaderState = false;
-
-    return S_OK;
-}
-
-HRESULT CD3D12Renderer::CreatePlaneTexture(UINT width, UINT height, DXGI_FORMAT format, ComPtr<ID3D12Resource>& texture)
-{
-    D3D12_HEAP_PROPERTIES heapProperties{};
-    heapProperties.Type = D3D12_HEAP_TYPE_DEFAULT;
-
-    D3D12_RESOURCE_DESC desc{};
-    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-    desc.Alignment = 0;
-    desc.Width = width;
-    desc.Height = height;
-    desc.DepthOrArraySize = 1;
-    desc.MipLevels = 1;
-    desc.Format = format;
-    desc.SampleDesc.Count = 1;
-    desc.SampleDesc.Quality = 0;
-    desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-    desc.Flags = D3D12_RESOURCE_FLAG_NONE;
-
-    return m_device->CreateCommittedResource(&heapProperties, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&texture));
-}
-
-HRESULT CD3D12Renderer::CreateUploadBuffer(UINT64 size, ComPtr<ID3D12Resource>& buffer)
-{
-    D3D12_HEAP_PROPERTIES heapProperties{};
-    heapProperties.Type = D3D12_HEAP_TYPE_UPLOAD;
-
-    D3D12_RESOURCE_DESC desc{};
-    desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-    desc.Width = size;
-    desc.Height = 1;
-    desc.DepthOrArraySize = 1;
-    desc.MipLevels = 1;
-    desc.SampleDesc.Count = 1;
-    desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-    return m_device->CreateCommittedResource(&heapProperties, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&buffer));
-}
-
-PlaneUploadInfo CD3D12Renderer::GetPlaneUploadInfo(UINT width, UINT height)
-{
-    D3D12_RESOURCE_DESC desc{};
-    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-    desc.Width = width;
-    desc.Height = height;
-    desc.DepthOrArraySize = 1;
-    desc.MipLevels = 1;
-    desc.Format = DXGI_FORMAT_R8_UNORM;
-    desc.SampleDesc.Count = 1;
-    desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-
-    PlaneUploadInfo info{};
-    m_device->GetCopyableFootprints(&desc, 0, 1, 0, &info.footprint, &info.numRows, &info.rowSize, &info.totalBytes);
-
-    return info;
-}
-
-HRESULT CD3D12Renderer::CopyVideoPlanesToGpu()
-{
-    HRESULT hr = m_uploadCommandAllocator->Reset();
-    if (FAILED(hr))
-        return hr;
-
-    hr = m_uploadCommandList->Reset(m_uploadCommandAllocator.Get(), nullptr);
-    if (FAILED(hr))
-        return hr;
-
-    // Transition textures to COPY_DEST before updating
-    if (m_videoTexturesInShaderState)
-    {
-        D3D12_RESOURCE_BARRIER barriers[3]{};
-
-        ID3D12Resource* textures[] =
-        {
-            m_yTexture.Get(),
-            m_uTexture.Get(),
-            m_vTexture.Get()
-        };
-
-        for (UINT i = 0; i < 3; ++i)
-        {
-            barriers[i].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            barriers[i].Transition.pResource = textures[i];
-            barriers[i].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            barriers[i].Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-            barriers[i].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
-        }
-
-        m_uploadCommandList->ResourceBarrier(3, barriers);
-    }
-
-    // Copy Y, U and V planes
-    CopyPlaneToTexture(m_uploadCommandList.Get(), m_yUploadBuffer.Get(), m_yTexture.Get(), m_yUploadInfo.footprint);
-    CopyPlaneToTexture(m_uploadCommandList.Get(), m_uUploadBuffer.Get(), m_uTexture.Get(), m_uUploadInfo.footprint);
-    CopyPlaneToTexture(m_uploadCommandList.Get(), m_vUploadBuffer.Get(), m_vTexture.Get(), m_vUploadInfo.footprint);
-
-    // Transition textures to PIXEL_SHADER_RESOURCE
-    D3D12_RESOURCE_BARRIER barriers[3]{};
-
-    ID3D12Resource* textures[] =
-    {
-        m_yTexture.Get(),
-        m_uTexture.Get(),
-        m_vTexture.Get()
-    };
-
-    for (UINT i = 0; i < 3; ++i)
-    {
-        barriers[i].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        barriers[i].Transition.pResource = textures[i];
-        barriers[i].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-        barriers[i].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-        barriers[i].Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-    }
-
-    m_uploadCommandList->ResourceBarrier(3, barriers);
-
-    hr = m_uploadCommandList->Close();
-    if (FAILED(hr))
-        return hr;
-
-    ID3D12CommandList* lists[] = { m_uploadCommandList.Get()};
-
-    m_commandQueue->ExecuteCommandLists(1, lists);
-
-    m_videoTexturesInShaderState = true;
-
-    // Signal GPU
-    m_uploadFenceValue = SignalGpu();
-    if (m_uploadFenceValue == 0)
-        return E_FAIL;
-
-    return S_OK;
-}
-
-HRESULT CD3D12Renderer::CreateVideoSrvHeap()
-{
-    D3D12_DESCRIPTOR_HEAP_DESC desc{};
-    desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    desc.NumDescriptors = 3;
-    desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-
-    HRESULT hr = m_device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&m_videoSrvHeap));
-    if (FAILED(hr))
-        return hr;
-
-    m_srvDescriptorSize = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-
-    return S_OK;
-}
-
-void CD3D12Renderer::CreateVideoSrvs()
-{
-    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-    srvDesc.Texture2D.MostDetailedMip = 0;
-    srvDesc.Texture2D.MipLevels = 1;
-    srvDesc.Format = DXGI_FORMAT_R8_UNORM;
-
-    D3D12_CPU_DESCRIPTOR_HANDLE handle = m_videoSrvHeap->GetCPUDescriptorHandleForHeapStart();
-    m_device->CreateShaderResourceView(m_yTexture.Get(), &srvDesc, handle);
-
-    handle.ptr += m_srvDescriptorSize;
-    m_device->CreateShaderResourceView(m_uTexture.Get(), &srvDesc, handle);
-
-    handle.ptr += m_srvDescriptorSize;
-    m_device->CreateShaderResourceView(m_vTexture.Get(), &srvDesc, handle);
-}
-
 HRESULT CD3D12Renderer::CreateRootSignature()
 {
     // 1. Define SRV Descriptor Range
@@ -849,13 +551,10 @@ HRESULT CD3D12Renderer::CreateRootSignature()
 
     // 4. Define Root Signature
     D3D12_ROOT_SIGNATURE_DESC rootSignatureDesc{};
-
     rootSignatureDesc.NumParameters = 1;
     rootSignatureDesc.pParameters = &rootParameter;
-
     rootSignatureDesc.NumStaticSamplers = 1;
     rootSignatureDesc.pStaticSamplers = &sampler;
-
     rootSignatureDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
     // 5. Serialize Root Signature
@@ -980,6 +679,230 @@ HRESULT CD3D12Renderer::CompileShader(const std::wstring& filename, const char* 
             OutputDebugStringA(static_cast<const char*>(errorBlob->GetBufferPointer()));
 
         return hr;
+    }
+
+    return S_OK;
+}
+
+HRESULT CD3D12Renderer::CreateVideoSrvHeap()
+{
+    D3D12_DESCRIPTOR_HEAP_DESC desc{};
+    desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    desc.NumDescriptors = 1;
+    desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+
+    HRESULT hr = m_device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&m_videoSrvHeap));
+    if (FAILED(hr))
+        return hr;
+
+    // Get CPU descriptor handle
+    m_videoTextureSrvHandle = m_videoSrvHeap->GetCPUDescriptorHandleForHeapStart();
+
+    return S_OK;
+}
+
+void CD3D12Renderer::CreateVideoSrv()
+{
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Texture2D.MostDetailedMip = 0;
+    srvDesc.Texture2D.MipLevels = 1;
+    srvDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+
+    m_device->CreateShaderResourceView(m_videoTexture.Get(), &srvDesc, m_videoTextureSrvHandle);
+}
+
+HRESULT CD3D12Renderer::CreateVideoTexture(UINT width, UINT height)
+{
+    if (width == 0 || height == 0)
+        return E_INVALIDARG;
+
+    m_videoTexture.Reset();
+    m_videoUploadBuffer.Reset();
+
+    D3D12_RESOURCE_DESC textureDesc{};
+    textureDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    textureDesc.Width = width;
+    textureDesc.Height = height;
+    textureDesc.DepthOrArraySize = 1;
+    textureDesc.MipLevels = 1;
+    textureDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    textureDesc.SampleDesc.Count = 1;
+    textureDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    textureDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+    D3D12_HEAP_PROPERTIES defaultHeap{};
+    defaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+    HRESULT hr = m_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &textureDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&m_videoTexture));
+    if (FAILED(hr))
+        return hr;
+
+    // Calculate the required upload buffer size and layout
+    m_device->GetCopyableFootprints(&textureDesc, 0, 1, 0, &m_videoFootprint, nullptr, nullptr, &m_videoUploadBufferSize);
+
+    D3D12_HEAP_PROPERTIES uploadHeap{};
+    uploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
+
+    D3D12_RESOURCE_DESC bufferDesc{};
+    bufferDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    bufferDesc.Width = m_videoUploadBufferSize;
+    bufferDesc.Height = 1;
+    bufferDesc.DepthOrArraySize = 1;
+    bufferDesc.MipLevels = 1;
+    bufferDesc.SampleDesc.Count = 1;
+    bufferDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    hr = m_device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &bufferDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&m_videoUploadBuffer));
+    if (FAILED(hr))
+    {
+        m_videoTexture.Reset();
+        return hr;
+    }
+
+    m_videoTexturesInShaderState = false;
+
+    return S_OK;
+}
+
+HRESULT CD3D12Renderer::CreateUploadBuffer(UINT64 size, ComPtr<ID3D12Resource>& buffer)
+{
+    D3D12_HEAP_PROPERTIES heapProperties{};
+    heapProperties.Type = D3D12_HEAP_TYPE_UPLOAD;
+
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    desc.Width = size;
+    desc.Height = 1;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels = 1;
+    desc.SampleDesc.Count = 1;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    return m_device->CreateCommittedResource(&heapProperties, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&buffer));
+}
+
+D3D12_VIEWPORT CD3D12Renderer::CalculateViewport()
+{
+    D3D12_VIEWPORT viewport{};
+
+    if (m_windowWidth == 0 || m_windowHeight == 0 || m_videoWidth == 0 || m_videoHeight == 0)
+        return viewport;
+
+    const float scale = std::min(static_cast<float>(m_windowWidth) / m_videoWidth, static_cast<float>(m_windowHeight) / m_videoHeight);
+    const float displayWidth = m_videoWidth * scale;
+    const float displayHeight = m_videoHeight * scale;
+
+    viewport.TopLeftX = (m_windowWidth - displayWidth) / 2.0f;
+    viewport.TopLeftY = (m_windowHeight - displayHeight) / 2.0f;
+    viewport.Width = displayWidth;
+    viewport.Height = displayHeight;
+    viewport.MinDepth = 0.0f;
+    viewport.MaxDepth = 1.0f;
+
+    return viewport;
+}
+
+HRESULT CD3D12Renderer::CopyVideoPlanesToGpu()
+{
+    HRESULT hr = m_uploadCommandAllocator->Reset();
+    if (FAILED(hr))
+        return hr;
+
+    hr = m_uploadCommandList->Reset(m_uploadCommandAllocator.Get(), nullptr);
+    if (FAILED(hr))
+        return hr;
+
+    // Transition video texture from PIXEL_SHADER_RESOURCE to COPY_DEST
+    D3D12_RESOURCE_BARRIER barrier{};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier.Transition.pResource = m_videoTexture.Get();
+    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+
+    if (m_videoTexturesInShaderState)
+    {
+        m_uploadCommandList->ResourceBarrier(1, &barrier);
+    }
+
+    // Source: Upload Buffer
+    D3D12_TEXTURE_COPY_LOCATION srcLocation{};
+    srcLocation.pResource = m_videoUploadBuffer.Get();
+    srcLocation.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    srcLocation.PlacedFootprint = m_videoFootprint;
+
+    // Destination: Video Texture
+    D3D12_TEXTURE_COPY_LOCATION dstLocation{};
+    dstLocation.pResource = m_videoTexture.Get();
+    dstLocation.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    dstLocation.SubresourceIndex = 0;
+
+    // Copy Upload Buffer to Texture2D
+    m_uploadCommandList->CopyTextureRegion(&dstLocation, 0, 0, 0, &srcLocation, nullptr);
+
+    // Transition video texture to PIXEL_SHADER_RESOURCE
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+
+    m_uploadCommandList->ResourceBarrier(1, &barrier);
+
+    hr = m_uploadCommandList->Close();
+    if (FAILED(hr))
+        return hr;
+
+    ID3D12CommandList* lists[] = { m_uploadCommandList.Get() };
+
+    m_commandQueue->ExecuteCommandLists(1, lists);
+
+    m_videoTexturesInShaderState = true;
+
+    // Signal GPU
+    m_uploadFenceValue = SignalGpu();
+    if (m_uploadFenceValue == 0)
+        return E_FAIL;
+
+    return S_OK;
+}
+
+HRESULT CD3D12Renderer::WaitForFence(UINT64 fenceValue)
+{
+    if (m_fence->GetCompletedValue() >= fenceValue)
+        return S_OK;
+
+    HRESULT hr = m_fence->SetEventOnCompletion(fenceValue, m_fenceEvent);
+    if (FAILED(hr))
+        return hr;
+
+    DWORD result = WaitForSingleObject(m_fenceEvent, INFINITE);
+    if (result != WAIT_OBJECT_0)
+        return HRESULT_FROM_WIN32(result == WAIT_FAILED ? GetLastError() : ERROR_GEN_FAILURE);
+
+    return S_OK;
+}
+
+HRESULT CD3D12Renderer::WaitForGpu()
+{
+    if (!m_commandQueue || !m_fence)
+        return E_FAIL;
+
+    const UINT64 fenceValue = ++m_nextFenceValue;
+
+    HRESULT hr = m_commandQueue->Signal(m_fence.Get(), fenceValue);
+    if (FAILED(hr))
+        return hr;
+
+    if (m_fence->GetCompletedValue() < fenceValue)
+    {
+        hr = m_fence->SetEventOnCompletion(fenceValue, m_fenceEvent);
+        if (FAILED(hr))
+            return hr;
+
+        const DWORD waitResult = WaitForSingleObject(m_fenceEvent, INFINITE);
+
+        if (waitResult != WAIT_OBJECT_0)
+            return HRESULT_FROM_WIN32(waitResult == WAIT_FAILED ? GetLastError() : ERROR_GEN_FAILURE);
     }
 
     return S_OK;

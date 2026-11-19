@@ -10,7 +10,7 @@
 #include <vector>
 #define NOMINMAX
 #include <Windows.h>
-#include "Utility.h"
+#include "ResourceUtils.h"
 #include "BlockingQueue.h"
 
 struct PlayerConfig
@@ -18,28 +18,31 @@ struct PlayerConfig
     std::chrono::milliseconds videoBufferDurationMs{ 1000 };
 };
 
-class CPlayController
+class CPlaybackEngine
 {
 public:
-    CPlayController() = default;
-    ~CPlayController();
+    CPlaybackEngine();
+    ~CPlaybackEngine();
 
-    CPlayController(const CPlayController&) = delete;
-    CPlayController(CPlayController&&) = delete;
-    CPlayController& operator=(const CPlayController&) = delete;
-    CPlayController& operator=(CPlayController&&) = delete;
+    CPlaybackEngine(const CPlaybackEngine&) = delete;
+    CPlaybackEngine(CPlaybackEngine&&) = delete;
+    CPlaybackEngine& operator=(const CPlaybackEngine&) = delete;
+    CPlaybackEngine& operator=(CPlaybackEngine&&) = delete;
 
 public:
     bool Initialize();
     bool PlayLive(const std::string& url);
     bool PlayRecorded(const std::string& url);
-    void Stop();
-    void Pause();
-    void Resume();
+    void PlayStop();
+    void PlayPause();
+    void PlayResume();
+    void Shutdown();
 
     double GetMasterClock() const;
     bool TryGetVideoFrame(VideoFrame& frame);
     HANDLE GetVideoFrameEvent() const { return m_videoFrameEvent; }
+    HANDLE GetStateChangedEvent() const { return m_stateChangedEvent; }
+    PlaybackState GetPlaybackState() const { return m_playbackState; }
 
 private:
     void StartThreads();
@@ -58,10 +61,10 @@ private:
     void PauseMasterClock();
     void ResumeMasterClock();
 
+    bool ConvertFrameToBGRA(AVFrame* srcFrame, AVFrame* rgbFrame);
     static int InterruptCallback(void* opaque);
     static void LogFFmpegError(const char* operation, int error);
     size_t GetMaxVideoFrameQueueSize() const;
-    void PrintStatistics();
 
 private:
     // FFmpeg objects
@@ -69,20 +72,25 @@ private:
     CodecPtr m_videoCodecContext;
 
     AVStream* m_videoAVStream{ nullptr };
+    FramePtr m_decodedFrame;
 
     int m_videoStreamIndex{ -1 };
     double m_timestampOrigin{ 0.0 };
 
     HANDLE m_videoFrameEvent{ nullptr };
+    HANDLE m_stateChangedEvent{ nullptr };
 
     // Queues
     CBlockingQueue<PacketPtr> m_videoPacketQueue{ 128 };
     CBlockingQueue<VideoFrame> m_videoFrameQueue{ 30 };
 
+    SwsContext* m_swsContext{ nullptr };
+
     // Worker threads
     std::jthread m_demuxThread;
     std::jthread m_videoDecodeThread;
     std::stop_source m_stopSource;
+    std::mutex m_mutex;
 
     std::atomic<bool> m_videoDone{ false };
 
@@ -98,13 +106,9 @@ private:
     bool m_clockPaused{ false };
     double m_pausedClock{ 0.0 };
 
-    // FPS stats
-    std::chrono::steady_clock::time_point m_lastStatsTime{};
-    std::atomic<uint64_t> m_decodedFrameCount{ 0 };
-    std::uint64_t m_lastDecodedFrameCount{ 0 };
-
     PlayerConfig m_config;
 
     std::string m_url;
     StreamType m_streamType{ StreamType::Live };
+    std::atomic<PlaybackState> m_playbackState{ PlaybackState::Stopped };
 };

@@ -1,21 +1,30 @@
 #include "PlayerInstance.h"
+#include "PlayerGlobalContext.h"
+#include "D3D12Renderer.h"
+#include "GdiRenderer.h"
+#include "PlaybackEngine.h"
 
 namespace
 {
     constexpr double EARLY_FRAME_THRESHOLD_SECONDS = 0.003;
-    constexpr double LATE_FRAME_THRESHOLD_SECONDS = 0.500;
+    constexpr double LATE_FRAME_THRESHOLD_SECONDS = 0.5;
 }
 
 CPlayerInstance::CPlayerInstance()
 {
-    m_renderer = std::make_unique<CD3D12Renderer>();
-    m_controller = std::make_unique< CPlayController>();
 }
 
 CPlayerInstance::~CPlayerInstance()
 {
     StopRendering();
     m_renderer->Shutdown();
+
+    if (m_initialized)
+    {
+        CloseHandle(m_commandEvent);
+        CloseHandle(m_stopEvent);
+        CloseHandle(m_renderTimer);
+    }
 
     if (m_hwnd)
     {
@@ -31,6 +40,17 @@ HRESULT CPlayerInstance::Initialize(HWND parentWnd)
     if (m_initialized)
         return S_OK;
 
+    if (CPlayerGlobalContext::GetInstance().IsD3D12Available())
+    {
+        m_renderer = std::make_unique<CD3D12Renderer>();
+    }
+    else
+    {
+        m_renderer = std::make_unique<CGdiRenderer>();
+    }
+
+    m_playbackEngine = std::make_unique<CPlaybackEngine>();
+
     // Create child window
     m_hwnd = CreateWindowExW(0, L"VideoPlayerWindow", nullptr, WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS, 0, 0, 0, 0,
         parentWnd, nullptr, GetModuleHandleW(nullptr), this);
@@ -42,12 +62,12 @@ HRESULT CPlayerInstance::Initialize(HWND parentWnd)
     if (FAILED(hr))
         return hr;
 
-    if (!m_controller->Initialize())
+    if (!m_playbackEngine->Initialize())
         return E_FAIL;
 
-    m_commandEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    m_stopEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    m_renderTimer = CreateWaitableTimerW(nullptr, FALSE, nullptr);
+    m_commandEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
+    m_stopEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
+    m_renderTimer = CreateWaitableTimer(nullptr, FALSE, nullptr);
     if (!m_commandEvent || !m_stopEvent || !m_renderTimer)
         return HRESULT_FROM_WIN32(GetLastError());
 
@@ -98,42 +118,30 @@ HRESULT CPlayerInstance::GetWindowPos(RECT* windowPos)
 HRESULT CPlayerInstance::PlayLive(long cameraNumber, long playSpeed)
 {
     const std::string url = "qable-sample-720p-10s.mp4";
-    m_controller->PlayLive(url);
-
-    std::lock_guard lock(m_commandMutex);
-
-    m_commandQueue.push(PlayerCommand{ PlayerCommandType::Play });
-    SetEvent(m_commandEvent);
+    m_playbackEngine->PlayRecorded(url);
+    //const std::string url = "rtsp://127.0.0.1:8554/test";
+    //m_playbackEngine->PlayLive(url);
 
     return S_OK;
 }
 
 HRESULT CPlayerInstance::PlayStop()
 {
-    std::lock_guard lock(m_commandMutex);
-
-    m_commandQueue.push(PlayerCommand{ PlayerCommandType::Stop });
-    SetEvent(m_commandEvent);
+    m_playbackEngine->PlayStop();
 
     return S_OK;
 }
 
 HRESULT CPlayerInstance::PlayPause()
 {
-    std::lock_guard lock(m_commandMutex);
-
-    m_commandQueue.push(PlayerCommand{ PlayerCommandType::Pause });
-    SetEvent(m_commandEvent);
+    m_playbackEngine->PlayPause();
 
     return S_OK;
 }
 
 HRESULT CPlayerInstance::PlayResume()
 {
-    std::lock_guard lock(m_commandMutex);
-
-    m_commandQueue.push(PlayerCommand{ PlayerCommandType::Resume });
-    SetEvent(m_commandEvent);
+    m_playbackEngine->PlayResume();
 
     return S_OK;
 }
@@ -177,12 +185,16 @@ void CPlayerInstance::RenderThread(std::stop_token stopToken)
 
         // Calculate the next wake-up time
         const DWORD timeoutMs = CalculateNextWakeUpTimeout();
-        // 5. Wait for DXGI when a frame is ready
-        const bool waitForFrameLatency = (m_playbackState == PlaybackState::Playing) && m_pendingVideoFrame.has_value() && (timeoutMs == 0);
+        // Wait for DXGI when a frame is ready
+        const bool waitForFrameLatency = (m_playbackEngine->GetPlaybackState() == PlaybackState::Playing) && m_pendingVideoFrame.has_value() && (timeoutMs == 0);
 
         const RenderWaitResult result = WaitForRenderEvents(timeoutMs, waitForFrameLatency);
         if (result == RenderWaitResult::StopRequested || result == RenderWaitResult::Failed)
             break;
+        else if (result == RenderWaitResult::PlaybackStateChanged)
+        {
+            m_pendingVideoFrame.reset();
+        }
     }
 
     m_renderer->Shutdown();
@@ -213,44 +225,6 @@ void CPlayerInstance::ProcessPendingCommands(std::stop_token stopToken)
             break;
         case PlayerCommandType::Clear:
             break;
-        case PlayerCommandType::Play:
-        {
-            if (m_playbackState != PlaybackState::Stopped)
-                break;
-
-            m_pendingVideoFrame.reset();
-            m_playbackState = PlaybackState::Playing;
-            break;
-        }
-        case PlayerCommandType::Stop:
-        {
-            if (m_playbackState == PlaybackState::Stopped)
-                break;
-
-            m_controller->Stop();
-            m_playbackState = PlaybackState::Stopped;
-            break;
-        }
-        case PlayerCommandType::Pause:
-        {
-            if (m_playbackState == PlaybackState::Stopped)
-                break;
-
-            if (m_playbackState.exchange(PlaybackState::Paused) == PlaybackState::Paused)
-                break;
-
-            m_controller->Pause();
-            break;
-        }
-        case PlayerCommandType::Resume:
-        {
-            if (m_playbackState != PlaybackState::Paused)
-                break;
-
-            m_controller->Resume();
-            m_playbackState = PlaybackState::Playing;
-            break;
-        }
         default:
             break;
         }
@@ -273,23 +247,19 @@ void CPlayerInstance::ProcessPendingCommands(std::stop_token stopToken)
 void CPlayerInstance::ProcessVideoFrames(std::stop_token stopToken)
 {
     // Only process video frames while playing
-    if (m_playbackState != PlaybackState::Playing)
-        return;
-
-    // Process frames until we find one that is ready to render
-    while (m_playbackState == PlaybackState::Playing)
+    while (m_playbackEngine->GetPlaybackState() == PlaybackState::Playing)
     {
         // Get the next frame if there is no pending frame
         if (!m_pendingVideoFrame)
         {
             VideoFrame frame;
-            if (!m_controller->TryGetVideoFrame(frame))
+            if (!m_playbackEngine->TryGetVideoFrame(frame))
                 return;
 
             m_pendingVideoFrame = std::move(frame);
         }
 
-        const double masterClock = m_controller->GetMasterClock();
+        const double masterClock = m_playbackEngine->GetMasterClock();
         const double difference = m_pendingVideoFrame->pts - masterClock;
 
         // Frame is too early
@@ -304,7 +274,6 @@ void CPlayerInstance::ProcessVideoFrames(std::stop_token stopToken)
             continue;
         }
 
-        // Render the frame
         const HRESULT hr = m_renderer->UploadVideoFrame(m_pendingVideoFrame->frame.get());
         if (FAILED(hr))
         {
@@ -315,7 +284,6 @@ void CPlayerInstance::ProcessVideoFrames(std::stop_token stopToken)
             return;
         }
 
-        // 4. Render
         m_renderer->Render();
 
         // Frame has been submitted for rendering
@@ -328,13 +296,13 @@ void CPlayerInstance::ProcessVideoFrames(std::stop_token stopToken)
 
 DWORD CPlayerInstance::CalculateNextWakeUpTimeout() const
 {
-    if (m_playbackState != PlaybackState::Playing)
+    if (m_playbackEngine->GetPlaybackState() != PlaybackState::Playing)
         return INFINITE;
 
     if (!m_pendingVideoFrame)
         return INFINITE;
 
-    const double difference = m_pendingVideoFrame->pts - m_controller->GetMasterClock();
+    const double difference = m_pendingVideoFrame->pts - m_playbackEngine->GetMasterClock();
     const double waitSeconds = difference - EARLY_FRAME_THRESHOLD_SECONDS;
     if (waitSeconds <= 0.0)
         return 0;
@@ -352,7 +320,6 @@ RenderWaitResult CPlayerInstance::WaitForRenderEvents(DWORD timeoutMs, bool wait
     else
     {
         LARGE_INTEGER dueTime{};
-
         dueTime.QuadPart = -static_cast<LONGLONG>(timeoutMs) * 10'000;
 
         if (!SetWaitableTimer(m_renderTimer, &dueTime, 0, nullptr, nullptr, FALSE))
@@ -361,17 +328,18 @@ RenderWaitResult CPlayerInstance::WaitForRenderEvents(DWORD timeoutMs, bool wait
         }
     }
 
-    HANDLE handles[5]{};
+    HANDLE handles[6]{};
     DWORD count = 0;
 
     // Stop event has the highest priority
     handles[count++] = m_stopEvent;
     // Commands must be processed immediately
     handles[count++] = m_commandEvent;
+    handles[count++] = m_playbackEngine->GetStateChangedEvent();
     // Wait for a new video frame only when there is no pending frame
     if (!m_pendingVideoFrame)
     {
-        handles[count++] = m_controller->GetVideoFrameEvent();
+        handles[count++] = m_playbackEngine->GetVideoFrameEvent();
     }
     // Wait for DXGI to accept another frame
     if (waitForFrameLatency)
@@ -417,8 +385,12 @@ RenderWaitResult CPlayerInstance::WaitForRenderEvents(DWORD timeoutMs, bool wait
     {
         return RenderWaitResult::CommandReceived;
     }
+    else if (index == 2)
+    {
+        return RenderWaitResult::PlaybackStateChanged;
+    }
 
-    DWORD nextIndex = 2;
+    DWORD nextIndex = 3;
 
     if (!m_pendingVideoFrame)
     {

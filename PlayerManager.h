@@ -2,7 +2,7 @@
 
 #include <atomic>
 #include <memory>
-#include <mutex>
+#include <shared_mutex>
 #include <unordered_map>
 #include <Windows.h>
 #include "PlayerInstance.h"
@@ -21,6 +21,14 @@ public:
         if (!parentWnd || !IsWindow(parentWnd) || !playerInstance)
             return E_INVALIDARG;
 
+        CPlayerGlobalContext& context = CPlayerGlobalContext::GetInstance();
+        if (!context.IsInitialized())
+        {
+            HRESULT hr = context.Initialize();
+            if (FAILED(hr))
+                return hr;
+        }
+
         std::shared_ptr<CPlayerInstance> player = std::make_shared<CPlayerInstance>();
         HRESULT hr = player->Initialize(parentWnd);
         if (FAILED(hr))
@@ -29,7 +37,7 @@ public:
         const long instance = m_nextPlayerId.fetch_add(1);
 
         {
-            std::lock_guard<std::mutex> lock(m_mutex);
+            std::unique_lock<std::shared_mutex> lock(m_mutex);
             m_players.emplace(instance, std::move(player));
         }
 
@@ -43,7 +51,7 @@ public:
         std::shared_ptr<CPlayerInstance> player;
 
         {
-            std::lock_guard<std::mutex> lock(m_mutex);
+            std::unique_lock<std::shared_mutex> lock(m_mutex);
 
             auto it = m_players.find(playerInstance);
             if (it == m_players.end())
@@ -124,9 +132,9 @@ private:
     CPlayerManager& operator=(const CPlayerManager&) = delete;
     CPlayerManager& operator=(CPlayerManager&&) = delete;
 
-    std::shared_ptr<CPlayerInstance> GetPlayer(long playerInstance)
+    std::shared_ptr<CPlayerInstance> GetPlayer(long playerInstance) const
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
+        std::shared_lock<std::shared_mutex> lock(m_mutex);
 
         auto it = m_players.find(playerInstance);
         if (it == m_players.end())
@@ -136,7 +144,7 @@ private:
     }
 
 private:
-    std::mutex m_mutex;
+    mutable std::shared_mutex m_mutex;
     std::unordered_map<long, std::shared_ptr<CPlayerInstance>> m_players;
     std::atomic<long> m_nextPlayerId{ 1 };
 };
