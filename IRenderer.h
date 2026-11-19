@@ -1,5 +1,6 @@
 #pragma once
 
+#define NOMINMAX
 #include <Windows.h>
 
 struct AVFrame;
@@ -16,4 +17,11 @@ public:
     virtual HRESULT Render() = 0;
     virtual HRESULT Clear() = 0;
     virtual void Shutdown() = 0;
+
+protected:
+    HWND m_hwnd;
+    UINT m_videoWidth{ 0 };
+    UINT m_videoHeight{ 0 };
+    UINT m_windowWidth{ 0 };
+    UINT m_windowHeight{ 0 };
 };

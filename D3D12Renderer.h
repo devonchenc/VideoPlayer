@@ -4,7 +4,6 @@
 #include <cstdint>
 #include <mutex>
 #define NOMINMAX
-#include <Windows.h>
 #include <wrl/client.h>
 #include <dxgi1_6.h>
 #include <d3d12.h>
@@ -57,7 +56,6 @@ private:
     UINT64 SignalGpu();
 
 private:
-    HWND m_hwnd;
     ComPtr<IDXGIFactory6> m_factory;
     ComPtr<ID3D12Device> m_device;
     ComPtr<ID3D12CommandQueue> m_commandQueue;
@@ -76,12 +74,7 @@ private:
     HANDLE m_fenceEvent{ nullptr };
     HANDLE m_frameLatencyWaitableObject{ nullptr };
 
-    UINT m_windowWidth{ 0 };
-    UINT m_windowHeight{ 0 };
     UINT m_rtvDescriptorSize{ 0 };
-
-    UINT m_videoWidth{ 0 };
-    UINT m_videoHeight{ 0 };
 
     // Texture
     ComPtr<ID3D12Resource> m_videoTexture;

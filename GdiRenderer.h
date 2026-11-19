@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+#include <vector>
 #include "IRenderer.h"
 
 class CGdiRenderer : public IRenderer
@@ -14,4 +16,7 @@ public:
     virtual HRESULT Render();
     virtual HRESULT Clear();
     virtual void Shutdown();
+
+private:
+    std::vector<std::uint8_t> m_videoBuffer;
 };

@@ -52,8 +52,8 @@ HRESULT CPlayerInstance::Initialize(HWND parentWnd)
     m_playbackEngine = std::make_unique<CPlaybackEngine>();
 
     // Create child window
-    m_hwnd = CreateWindowExW(0, L"VideoPlayerWindow", nullptr, WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS, 0, 0, 0, 0,
-        parentWnd, nullptr, GetModuleHandleW(nullptr), this);
+    m_hwnd = CreateWindowEx(0, L"VideoPlayerWindow", nullptr, WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
+        0, 0, 0, 0, parentWnd, nullptr, GetModuleHandleW(nullptr), this);
 
     if (m_hwnd == nullptr)
         return HRESULT_FROM_WIN32(GetLastError());
