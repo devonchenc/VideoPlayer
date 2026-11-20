@@ -135,6 +135,8 @@ HRESULT CPlayerGlobalContext::InitializeD3D12()
 
     // Create shared D3D12 Device
     hr = D3D12CreateDevice(m_adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&m_device));
+    if (FAILED(hr))
+        return hr;
 
     // Create command queue
     D3D12_COMMAND_QUEUE_DESC queueDesc{};
