@@ -61,11 +61,6 @@ HRESULT CGdiRenderer::UploadVideoFrame(AVFrame* frame)
     return S_OK;
 }
 
-HANDLE CGdiRenderer::GetFrameLatencyWaitableObject() const
-{
-    return nullptr;
-}
-
 HRESULT CGdiRenderer::Render()
 {
     if (!m_hwnd)
@@ -106,11 +101,6 @@ HRESULT CGdiRenderer::Render()
     if (result == GDI_ERROR || result == 0)
         return E_FAIL;
 
-    return S_OK;
-}
-
-HRESULT CGdiRenderer::Clear()
-{
     return S_OK;
 }
 

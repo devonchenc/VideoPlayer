@@ -320,97 +320,37 @@ RenderWaitResult CPlayerInstance::WaitForRenderEvents(DWORD timeoutMs, bool wait
         }
     }
 
+    constexpr DWORD count = 4;
     HANDLE handles[6]{};
-    DWORD count = 0;
+    handles[0] = m_stopEvent;
+    handles[1] = m_commandEvent;
+    handles[2] = m_playbackEngine->GetStateChangedEvent();
 
-    // Stop event has the highest priority
-    handles[count++] = m_stopEvent;
-    // Commands must be processed immediately
-    handles[count++] = m_commandEvent;
-    handles[count++] = m_playbackEngine->GetStateChangedEvent();
-    // Wait for a new video frame only when there is no pending frame
     if (!m_pendingVideoFrame)
     {
-        handles[count++] = m_playbackEngine->GetVideoFrameEvent();
+        // Wait for a new video frame only when there is no pending frame
+        handles[3] = m_playbackEngine->GetVideoFrameEvent();
     }
-    // Wait for DXGI to accept another frame
-    if (waitForFrameLatency)
+    else
     {
-        const HANDLE frameLatencyHandle = m_renderer->GetFrameLatencyWaitableObject();
-        if (!frameLatencyHandle)
-        {
-            return RenderWaitResult::Failed;
-        }
-
-        handles[count++] = frameLatencyHandle;
-    }
-
-    if (timeoutMs != INFINITE && timeoutMs != 0)
-    {
-        handles[count++] = m_renderTimer;
+        handles[3] = m_renderTimer;
     }
 
     const DWORD result = WaitForMultipleObjects(count, handles, FALSE, INFINITE);
-
-    if (result == WAIT_FAILED)
+    switch (result)
     {
-        return RenderWaitResult::Failed;
-    }
-    else if (result == WAIT_TIMEOUT)
-    {
-        // Zero-timeout polling
-        return RenderWaitResult::TimerExpired;
-    }
-    else if (result < WAIT_OBJECT_0 || result >= WAIT_OBJECT_0 + count)
-    {
-        return RenderWaitResult::Failed;
-    }
-
-    const DWORD index = result - WAIT_OBJECT_0;
-
-    // Handle the signaled object
-    if (index == 0)
-    {
+    case WAIT_OBJECT_0:
         return RenderWaitResult::StopRequested;
-    }
-    else if (index == 1)
-    {
+    case WAIT_OBJECT_0 + 1:
         return RenderWaitResult::CommandReceived;
-    }
-    else if (index == 2)
-    {
+    case WAIT_OBJECT_0 + 2:
         return RenderWaitResult::PlaybackStateChanged;
-    }
-
-    DWORD nextIndex = 3;
-
-    if (!m_pendingVideoFrame)
-    {
-        if (index == nextIndex)
-        {
+    case WAIT_OBJECT_0 + 3:
+        if (!m_pendingVideoFrame)
             return RenderWaitResult::VideoFrameAvailable;
-        }
-
-        ++nextIndex;
-    }
-
-    if (waitForFrameLatency)
-    {
-        if (index == nextIndex)
-        {
-            return RenderWaitResult::FrameLatencyAvailable;
-        }
-
-        ++nextIndex;
-    }
-
-    if (timeoutMs != INFINITE && timeoutMs != 0)
-    {
-        if (index == nextIndex)
-        {
+        else
             return RenderWaitResult::TimerExpired;
-        }
+    default:
+        return RenderWaitResult::Failed;
     }
-
-    return RenderWaitResult::Failed;
 }

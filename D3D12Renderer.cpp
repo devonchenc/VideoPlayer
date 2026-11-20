@@ -58,7 +58,7 @@ HRESULT CD3D12Renderer::Resize(UINT width, UINT height)
         renderTarget.Reset();
 
     // Resize swap chain buffers
-    hr = m_swapChain->ResizeBuffers(FRAME_COUNT, width, height, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT);
+    hr = m_swapChain->ResizeBuffers(FRAME_COUNT, width, height, DXGI_FORMAT_R8G8B8A8_UNORM, 0);
     if (FAILED(hr))
         return hr;
 
@@ -257,84 +257,6 @@ HRESULT CD3D12Renderer::Render()
     return hr;
 }
 
-HRESULT CD3D12Renderer::Clear()
-{
-    if (!m_swapChain)
-        return E_FAIL;
-
-    const UINT backBufferIndex = m_swapChain->GetCurrentBackBufferIndex();
-    FrameContext& frame = m_frames[backBufferIndex];
-
-    // Wait until previous GPU work is completed
-    HRESULT hr = WaitForFence(frame.fenceValue);
-    if (FAILED(hr))
-    {
-        OutputDebugStringW(L"Wait for frame failed\n");
-        return hr;
-    }
-
-    // Reset command allocator
-    hr = frame.commandAllocator->Reset();
-    if (FAILED(hr))
-    {
-        OutputDebugStringW(L"Command allocator reset failed\n");
-        return hr;
-    }
-
-    // Reset command list
-    hr = m_renderCommandList->Reset(frame.commandAllocator.Get(), nullptr);
-    if (FAILED(hr))
-        return hr;
-
-    ComPtr<ID3D12Resource>& backBuffer = m_renderTargets[backBufferIndex];
-
-    // Transition: PRESENT -> RENDER_TARGET
-    D3D12_RESOURCE_BARRIER barrier{};
-    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-    barrier.Transition.pResource = backBuffer.Get();
-    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
-    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
-
-    m_renderCommandList->ResourceBarrier(1, &barrier);
-
-    // Clear render target to black
-    constexpr float clearColor[] = { 0.0f, 0.0f, 0.0f, 1.0f };
-    m_renderCommandList->ClearRenderTargetView(m_rtvHandles[backBufferIndex], clearColor, 0, nullptr);
-
-    // Transition: RENDER_TARGET -> PRESENT
-    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
-    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
-
-    m_renderCommandList->ResourceBarrier(1, &barrier);
-
-    // Close command list
-    hr = m_renderCommandList->Close();
-    if (FAILED(hr))
-    {
-        OutputDebugStringW(L"CommandList Close failed\n");
-        return hr;
-    }
-
-    // Execute command list
-    ID3D12CommandList* commandLists[] = { m_renderCommandList.Get() };
-    m_commandQueue->ExecuteCommandLists(1, commandLists);
-
-    // Signal GPU completion for this frame
-    frame.fenceValue = SignalGpu();
-
-    // Present
-    hr = m_swapChain->Present(1, 0);
-    if (FAILED(hr))
-    {
-        OutputDebugStringW(L"Present failed\n");
-        return hr;
-    }
-
-    return S_OK;
-}
-
 void CD3D12Renderer::Shutdown()
 {
     if (m_commandQueue && m_fence && m_fenceEvent)
@@ -348,12 +270,6 @@ void CD3D12Renderer::Shutdown()
 
     for (ComPtr<ID3D12Resource>& target : m_renderTargets)
         target.Reset();
-
-    if (m_frameLatencyWaitableObject)
-    {
-        CloseHandle(m_frameLatencyWaitableObject);
-        m_frameLatencyWaitableObject = nullptr;
-    }
 
     m_rtvHeap.Reset();
     m_swapChain.Reset();
@@ -452,7 +368,7 @@ HRESULT CD3D12Renderer::CreateSwapChain(HWND hwnd)
     desc.Scaling = DXGI_SCALING_STRETCH;
     desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
     desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
-    desc.Flags = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
+    desc.Flags = 0;
 
     ComPtr<IDXGISwapChain1> swapChain;
     HRESULT hr = m_factory->CreateSwapChainForHwnd(m_commandQueue.Get(), hwnd, &desc, nullptr, nullptr, &swapChain);
@@ -462,20 +378,6 @@ HRESULT CD3D12Renderer::CreateSwapChain(HWND hwnd)
     hr = swapChain.As(&m_swapChain);
     if (FAILED(hr))
         return hr;
-
-    // Configure maximum frame latency
-    hr = m_swapChain->SetMaximumFrameLatency(1);
-    if (FAILED(hr))
-    {
-        return hr;
-    }
-
-    // Retrieve the frame latency waitable object
-    m_frameLatencyWaitableObject = m_swapChain->GetFrameLatencyWaitableObject();
-    if (!m_frameLatencyWaitableObject)
-    {
-        return HRESULT_FROM_WIN32(GetLastError());
-    }
 
     // Disable Alt+Enter fullscreen switching
     return m_factory->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER);
