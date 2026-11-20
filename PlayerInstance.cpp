@@ -17,7 +17,9 @@ CPlayerInstance::CPlayerInstance()
 CPlayerInstance::~CPlayerInstance()
 {
     Shutdown();
-    m_renderer->Shutdown();
+
+    if (m_renderer)
+        m_renderer->Shutdown();
 
     if (m_initialized)
     {
