@@ -7,13 +7,13 @@
 class CGdiRenderer : public IRenderer
 {
 public:
-    virtual HRESULT Initialize(HWND hwnd);
-    virtual HRESULT Resize(UINT width, UINT height);
-    virtual HRESULT UploadVideoFrame(AVFrame* frame);
-    virtual HANDLE GetFrameLatencyWaitableObject() const;
-    virtual HRESULT Render();
-    virtual HRESULT Clear();
-    virtual void Shutdown();
+    HRESULT Initialize(HWND hwnd) override;
+    HRESULT Resize(UINT width, UINT height) override;
+    HRESULT UploadVideoFrame(AVFrame* frame) override;
+    HANDLE GetFrameLatencyWaitableObject() const override;
+    HRESULT Render() override;
+    HRESULT Clear() override;
+    void Shutdown() override;
 
 private:
     std::vector<std::uint8_t> m_videoBuffer;

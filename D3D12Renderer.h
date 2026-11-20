@@ -28,13 +28,13 @@ namespace
 class CD3D12Renderer : public IRenderer
 {
 public:
-    HRESULT Initialize(HWND hwnd);
-    HRESULT Resize(UINT width, UINT height);
-    HRESULT UploadVideoFrame(AVFrame* frame);
-    HRESULT Render();
-    HRESULT Clear();
-    void Shutdown();
-    HANDLE GetFrameLatencyWaitableObject() const { return m_frameLatencyWaitableObject; }
+    HRESULT Initialize(HWND hwnd) override;
+    HRESULT Resize(UINT width, UINT height) override;
+    HRESULT UploadVideoFrame(AVFrame* frame) override;
+    HRESULT Render() override;
+    HRESULT Clear() override;
+    void Shutdown() override;
+    HANDLE GetFrameLatencyWaitableObject() const override { return m_frameLatencyWaitableObject; }
 
 private:
     HRESULT CreateCommandObjects();
