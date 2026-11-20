@@ -58,9 +58,6 @@ public:
 
     void Shutdown();
 
-    void StartRendering();
-    void StopRendering();
-
 private:
     void RenderThread(std::stop_token stopToken);
     void ProcessPendingCommands(std::stop_token stopToken);

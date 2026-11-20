@@ -16,7 +16,7 @@ CPlayerInstance::CPlayerInstance()
 
 CPlayerInstance::~CPlayerInstance()
 {
-    StopRendering();
+    Shutdown();
     m_renderer->Shutdown();
 
     if (m_initialized)
@@ -72,7 +72,7 @@ HRESULT CPlayerInstance::Initialize(HWND parentWnd)
         return HRESULT_FROM_WIN32(GetLastError());
 
     // Start rendering thread
-    StartRendering();
+    m_renderThread = std::jthread([this](std::stop_token stopToken) { RenderThread(stopToken); });
 
     m_initialized = true;
 
@@ -150,16 +150,6 @@ void CPlayerInstance::Shutdown()
 {
     SetEvent(m_stopEvent);
 
-    StopRendering();
-}
-
-void CPlayerInstance::StartRendering()
-{
-    m_renderThread = std::jthread([this](std::stop_token stopToken) { RenderThread(stopToken); });
-}
-
-void CPlayerInstance::StopRendering()
-{
     if (m_renderThread.joinable())
     {
         m_renderThread.request_stop();
