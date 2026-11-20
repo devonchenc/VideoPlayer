@@ -54,8 +54,10 @@ HRESULT CPlayerGlobalContext::RegisterWindowClass()
     wndclass.lpfnWndProc = PlayerWindowProc;
     wndclass.cbClsExtra = 0;
     wndclass.cbWndExtra = 0;
+    wndclass.hCursor = LoadCursor(nullptr, IDC_ARROW);
     wndclass.hInstance = GetModuleHandle(nullptr);
-    wndclass.lpszMenuName = NULL;
+    wndclass.hbrBackground = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
+    wndclass.lpszMenuName = nullptr;
     wndclass.lpszClassName = L"VideoPlayerWindow";
 
     if (!RegisterClassEx(&wndclass))

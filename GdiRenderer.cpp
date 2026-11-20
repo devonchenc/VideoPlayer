@@ -78,9 +78,6 @@ HRESULT CGdiRenderer::Render()
     if (!hdc)
         return HRESULT_FROM_WIN32(GetLastError());
 
-    // Clear background
-    PatBlt(hdc, 0, 0, m_windowWidth, m_windowHeight, BLACKNESS);
-
     // Calculate destination rectangle while preserving aspect ratio
     const double scale = std::min(static_cast<double>(m_windowWidth) / m_videoWidth, static_cast<double>(m_windowHeight) / m_videoHeight);
     const int dstWidth = static_cast<int>(m_videoWidth * scale);
