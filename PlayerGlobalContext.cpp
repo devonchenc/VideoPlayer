@@ -119,7 +119,12 @@ HRESULT CPlayerGlobalContext::InitializeD3D12()
         DXGI_ADAPTER_DESC1 desc{};
         adapter->GetDesc1(&desc);
 
+        // Skip software adapters
         if (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)
+            continue;
+
+        // Skip Microsoft Basic Render Driver
+        if (desc.VendorId == 0x1414 && desc.DeviceId == 0x008c)
             continue;
 
         hr = D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, __uuidof(ID3D12Device), nullptr);
