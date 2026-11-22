@@ -37,7 +37,7 @@ HRESULT CPlayerInstance::Initialize(HWND parentWnd)
 
     m_commandEvent.reset(CreateEvent(nullptr, TRUE, FALSE, nullptr));
     m_stopEvent.reset(CreateEvent(nullptr, TRUE, FALSE, nullptr));
-    m_renderTimer.reset(CreateWaitableTimer(nullptr, FALSE, nullptr));
+    m_renderTimer.reset(CreateWaitableTimerEx(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_MODIFY_STATE | SYNCHRONIZE));
     if (!m_commandEvent || !m_stopEvent || !m_renderTimer)
         return HRESULT_FROM_WIN32(GetLastError());
 
