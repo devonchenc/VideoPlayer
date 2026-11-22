@@ -22,6 +22,15 @@ enum class PlaybackState
     Stopped
 };
 
+struct HandleDeleter
+{
+    void operator()(HANDLE handle) const
+    {
+        if (handle && handle != INVALID_HANDLE_VALUE)
+            CloseHandle(handle);
+    }
+};
+
 struct FormatDeleter
 {
     void operator()(AVFormatContext* p) const
@@ -67,6 +76,7 @@ struct SwsDeleter
     }
 };
 
+using HandlePtr  = std::unique_ptr<void, HandleDeleter>;
 using FormatPtr = std::unique_ptr<AVFormatContext, FormatDeleter>;
 using CodecPtr = std::unique_ptr<AVCodecContext, CodecDeleter>;
 using PacketPtr = std::unique_ptr<AVPacket, PacketDeleter>;

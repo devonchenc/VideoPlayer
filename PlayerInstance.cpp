@@ -16,23 +16,16 @@ CPlayerInstance::CPlayerInstance()
 
 CPlayerInstance::~CPlayerInstance()
 {
-    Shutdown();
+    m_running = false;
 
-    if (m_renderer)
-        m_renderer->Shutdown();
+    if (m_stopEvent)
+        SetEvent(m_stopEvent.get());
 
-    if (m_initialized)
-    {
-        CloseHandle(m_commandEvent);
-        CloseHandle(m_stopEvent);
-        CloseHandle(m_renderTimer);
-    }
+    if (m_renderThread.joinable())
+        m_renderThread.join();
 
     if (m_hwnd)
-    {
         DestroyWindow(m_hwnd);
-        m_hwnd = nullptr;
-    }
 }
 
 HRESULT CPlayerInstance::Initialize(HWND parentWnd)
@@ -41,6 +34,29 @@ HRESULT CPlayerInstance::Initialize(HWND parentWnd)
 
     if (m_initialized)
         return S_OK;
+
+    m_commandEvent.reset(CreateEvent(nullptr, TRUE, FALSE, nullptr));
+    m_stopEvent.reset(CreateEvent(nullptr, TRUE, FALSE, nullptr));
+    m_renderTimer.reset(CreateWaitableTimer(nullptr, FALSE, nullptr));
+    if (!m_commandEvent || !m_stopEvent || !m_renderTimer)
+        return HRESULT_FROM_WIN32(GetLastError());
+
+    m_playbackEngine = std::make_unique<CPlaybackEngine>();
+    if (!m_playbackEngine->Initialize())
+        return E_FAIL;
+
+    if (m_hwnd)
+    {
+        DestroyWindow(m_hwnd);
+        m_hwnd = nullptr;
+    }
+
+    // Create child window
+    m_hwnd = CreateWindowEx(0, L"VideoPlayerWindow", nullptr, WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
+        0, 0, 0, 0, parentWnd, nullptr, GetModuleHandleW(nullptr), this);
+
+    if (m_hwnd == nullptr)
+        return HRESULT_FROM_WIN32(GetLastError());
 
     if (CPlayerGlobalContext::GetInstance().IsD3D12Available())
     {
@@ -51,27 +67,9 @@ HRESULT CPlayerInstance::Initialize(HWND parentWnd)
         m_renderer = std::make_unique<CGdiRenderer>();
     }
 
-    m_playbackEngine = std::make_unique<CPlaybackEngine>();
-
-    // Create child window
-    m_hwnd = CreateWindowEx(0, L"VideoPlayerWindow", nullptr, WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
-        0, 0, 0, 0, parentWnd, nullptr, GetModuleHandleW(nullptr), this);
-
-    if (m_hwnd == nullptr)
-        return HRESULT_FROM_WIN32(GetLastError());
-
     HRESULT hr = m_renderer->Initialize(m_hwnd);
     if (FAILED(hr))
         return hr;
-
-    if (!m_playbackEngine->Initialize())
-        return E_FAIL;
-
-    m_commandEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
-    m_stopEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
-    m_renderTimer = CreateWaitableTimer(nullptr, FALSE, nullptr);
-    if (!m_commandEvent || !m_stopEvent || !m_renderTimer)
-        return HRESULT_FROM_WIN32(GetLastError());
 
     // Start rendering thread
     m_running = true;
@@ -100,7 +98,7 @@ HRESULT CPlayerInstance::SetWindowPos(RECT newWindowPos)
     {
         std::lock_guard lock2(m_commandMutex);
         m_commandQueue.push({ PlayerCommandType::Resize, width, height });
-        SetEvent(m_commandEvent);
+        SetEvent(m_commandEvent.get());
     }
 
     return S_OK;
@@ -149,16 +147,6 @@ HRESULT CPlayerInstance::PlayResume()
     return S_OK;
 }
 
-void CPlayerInstance::Shutdown()
-{
-    m_running = false;
-
-    SetEvent(m_stopEvent);
-
-    if (m_renderThread.joinable())
-        m_renderThread.join();
-}
-
 void CPlayerInstance::RenderThread()
 {
     while (m_running)
@@ -173,16 +161,16 @@ void CPlayerInstance::RenderThread()
         const DWORD timeoutMs = CalculateNextWakeUpTimeout();
 
         // Configure the render timer
-        if (timeoutMs == INFINITE || timeoutMs == 0)
+        if (timeoutMs == INFINITE)
         {
-            CancelWaitableTimer(m_renderTimer);
+            CancelWaitableTimer(m_renderTimer.get());
         }
         else
         {
             LARGE_INTEGER dueTime{};
             dueTime.QuadPart = -static_cast<LONGLONG>(timeoutMs) * 10000LL;
 
-            if (!SetWaitableTimer(m_renderTimer, &dueTime, 0, nullptr, nullptr, FALSE))
+            if (!SetWaitableTimer(m_renderTimer.get(), &dueTime, 0, nullptr, nullptr, FALSE))
             {
                 OutputDebugStringW(L"Failed to set waitable timer.\n");
                 continue;
@@ -191,8 +179,8 @@ void CPlayerInstance::RenderThread()
 
         constexpr DWORD count = 4;
         HANDLE handles[count]{};
-        handles[0] = m_stopEvent;
-        handles[1] = m_commandEvent;
+        handles[0] = m_stopEvent.get();
+        handles[1] = m_commandEvent.get();
         handles[2] = m_playbackEngine->GetStateChangedEvent();
 
         if (!m_pendingVideoFrame)
@@ -202,7 +190,7 @@ void CPlayerInstance::RenderThread()
         }
         else
         {
-            handles[3] = m_renderTimer;
+            handles[3] = m_renderTimer.get();
         }
 
         const DWORD result = WaitForMultipleObjects(count, handles, FALSE, INFINITE);
@@ -302,7 +290,7 @@ void CPlayerInstance::ProcessPendingCommands()
         std::lock_guard lock(m_commandMutex);
 
         commands.swap(m_commandQueue);
-        ResetEvent(m_commandEvent);
+        ResetEvent(m_commandEvent.get());
     }
 
     std::optional<SIZE> pendingResize;

@@ -48,20 +48,13 @@ public:
 
     HRESULT ReleasePlayer(long playerInstance)
     {
-        std::shared_ptr<CPlayerInstance> player;
+        std::unique_lock<std::shared_mutex> lock(m_mutex);
 
-        {
-            std::unique_lock<std::shared_mutex> lock(m_mutex);
+        auto it = m_players.find(playerInstance);
+        if (it == m_players.end())
+            return HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
 
-            auto it = m_players.find(playerInstance);
-            if (it == m_players.end())
-                return HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
-
-            player = std::move(it->second);
-            m_players.erase(it);
-        }
-
-        player->Shutdown();
+        m_players.erase(it);
 
         return S_OK;
     }

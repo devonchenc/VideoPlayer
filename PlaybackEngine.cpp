@@ -25,8 +25,11 @@ CPlaybackEngine::~CPlaybackEngine()
 {
     Shutdown();
 
-    CloseHandle(m_videoFrameEvent);
-    CloseHandle(m_stateChangedEvent);
+    if (m_videoFrameEvent)
+        CloseHandle(m_videoFrameEvent);
+
+    if (m_stateChangedEvent)
+        CloseHandle(m_stateChangedEvent);
 }
 
 bool CPlaybackEngine::Initialize()

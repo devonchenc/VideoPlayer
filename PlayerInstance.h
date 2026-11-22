@@ -44,8 +44,6 @@ public:
     HRESULT PlayPause();
     HRESULT PlayResume();
 
-    void Shutdown();
-
 private:
     void RenderThread();
     void ProcessVideoFrames();
@@ -68,7 +66,7 @@ private:
 
     std::optional<VideoFrame> m_pendingVideoFrame;
 
-    HANDLE m_commandEvent{ nullptr };
-    HANDLE m_stopEvent{ nullptr };
-    HANDLE m_renderTimer{ nullptr };
+    HandlePtr m_commandEvent{ nullptr };
+    HandlePtr m_stopEvent{ nullptr };
+    HandlePtr m_renderTimer{ nullptr };
 };
