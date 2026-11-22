@@ -163,29 +163,25 @@ void CPlayerInstance::RenderThread(std::stop_token stopToken)
 {
     while (!stopToken.stop_requested())
     {
-        // Process all pending commands
-        ProcessPendingCommands(stopToken);
-
-        if (stopToken.stop_requested())
-            break;
-
         // Process video frames
         ProcessVideoFrames(stopToken);
 
         if (stopToken.stop_requested())
             break;
 
-        // Calculate the next wake-up time
+        // Calculate the next wakeup time
         const DWORD timeoutMs = CalculateNextWakeUpTimeout();
-        // Wait for DXGI when a frame is ready
-        const bool waitForFrameLatency = (m_playbackEngine->GetPlaybackState() == PlaybackState::Playing) && m_pendingVideoFrame.has_value() && (timeoutMs == 0);
+        const RenderWaitResult result = WaitForRenderEvents(timeoutMs);
 
-        const RenderWaitResult result = WaitForRenderEvents(timeoutMs, waitForFrameLatency);
-        if (result == RenderWaitResult::StopRequested || result == RenderWaitResult::Failed)
+        if (result == RenderWaitResult::StopRequested)
             break;
         else if (result == RenderWaitResult::PlaybackStateChanged)
         {
             m_pendingVideoFrame.reset();
+        }
+        else if (result == RenderWaitResult::CommandReceived)
+        {
+            ProcessPendingCommands(stopToken);
         }
     }
 
@@ -241,6 +237,9 @@ void CPlayerInstance::ProcessVideoFrames(std::stop_token stopToken)
     // Only process video frames while playing
     while (m_playbackEngine->GetPlaybackState() == PlaybackState::Playing)
     {
+        if (stopToken.stop_requested())
+            return;
+
         // Get the next frame if there is no pending frame
         if (!m_pendingVideoFrame)
         {
@@ -302,7 +301,7 @@ DWORD CPlayerInstance::CalculateNextWakeUpTimeout() const
     return static_cast<DWORD>(std::ceil(waitSeconds * 1000.0));
 }
 
-RenderWaitResult CPlayerInstance::WaitForRenderEvents(DWORD timeoutMs, bool waitForFrameLatency)
+RenderWaitResult CPlayerInstance::WaitForRenderEvents(DWORD timeoutMs)
 {
     // Configure the render timer
     if (timeoutMs == INFINITE || timeoutMs == 0)
@@ -321,7 +320,7 @@ RenderWaitResult CPlayerInstance::WaitForRenderEvents(DWORD timeoutMs, bool wait
     }
 
     constexpr DWORD count = 4;
-    HANDLE handles[6]{};
+    HANDLE handles[count]{};
     handles[0] = m_stopEvent;
     handles[1] = m_commandEvent;
     handles[2] = m_playbackEngine->GetStateChangedEvent();

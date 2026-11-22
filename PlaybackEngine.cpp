@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <iostream>
 #include <limits>
 
 namespace
@@ -201,7 +200,7 @@ void CPlaybackEngine::VideoDecodeThread(std::stop_token stopToken)
     {
         if (!DecodeVideoPacket(packet.get(), stopToken))
         {
-            std::cerr << "Video decoding failed" << std::endl;
+            OutputDebugString(L"Video decoding failed.\n");
             break;
         }
         packet.reset();
@@ -219,7 +218,7 @@ bool CPlaybackEngine::InitializeFFmpeg(const std::string& url)
     AVFormatContext* rawFormat = avformat_alloc_context();
     if (!rawFormat)
     {
-        std::cerr << "avformat_alloc_context failed" << std::endl;
+        OutputDebugString(L"avformat_alloc_context failed.\n");
         return false;
     }
 
@@ -253,7 +252,7 @@ bool CPlaybackEngine::InitializeFFmpeg(const std::string& url)
     m_videoStreamIndex = av_find_best_stream(m_formatContext.get(), AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
     if (m_videoStreamIndex < 0)
     {
-        std::cerr << "The input has no decodable video stream" << std::endl;
+        OutputDebugString(L"The input has no decodable video stream.\n");
         return false;
     }
 
@@ -292,7 +291,7 @@ bool CPlaybackEngine::InitializeVideoDecoder()
     const AVCodec* codec = avcodec_find_decoder(m_videoAVStream->codecpar->codec_id);
     if (!codec)
     {
-        std::cerr << "Video decoder not found" << std::endl;
+        OutputDebugString(L"Video decoder not found.\n");
         return false;
     }
 
@@ -336,7 +335,8 @@ void CPlaybackEngine::LogFFmpegError(const char* operation, int error)
 {
     char buffer[AV_ERROR_MAX_STRING_SIZE]{};
     av_strerror(error, buffer, sizeof(buffer));
-    std::cerr << operation << " failed: " << buffer << std::endl;
+    std::string str = std::format("{} failed: {}\n", operation, buffer);
+    OutputDebugStringA(str.c_str());
 }
 
 bool CPlaybackEngine::DecodeVideoPacket(AVPacket* packet, std::stop_token stopToken)

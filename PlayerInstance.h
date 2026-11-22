@@ -1,6 +1,5 @@
 #pragma once
 
-#include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -32,7 +31,6 @@ enum class RenderWaitResult
     PlaybackStateChanged,
     VideoFrameAvailable,
     TimerExpired,
-    FrameLatencyAvailable,
     Failed
 };
 
@@ -63,7 +61,7 @@ private:
     void ProcessPendingCommands(std::stop_token stopToken);
     void ProcessVideoFrames(std::stop_token stopToken);
     DWORD CalculateNextWakeUpTimeout() const;
-    RenderWaitResult WaitForRenderEvents(DWORD timeoutMs, bool waitForFrameLatency);
+    RenderWaitResult WaitForRenderEvents(DWORD timeoutMs);
 
 private:
     std::mutex m_mutex;
