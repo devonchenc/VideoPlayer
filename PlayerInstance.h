@@ -24,15 +24,6 @@ struct PlayerCommand
     UINT height{ 0 };
 };
 
-enum class RenderWaitResult
-{
-    StopRequested,
-    CommandReceived,
-    PlaybackStateChanged,
-    RenderReady,
-    Failed
-};
-
 class CPlayerInstance
 {
 public:
