@@ -307,7 +307,7 @@ void CPlayerInstance::ProcessPendingCommands()
 
     std::optional<SIZE> pendingResize;
 
-    while (!commands.empty())
+    while (m_running && !commands.empty())
     {
         PlayerCommand command = std::move(commands.front());
         commands.pop();
@@ -322,9 +322,6 @@ void CPlayerInstance::ProcessPendingCommands()
         default:
             break;
         }
-
-        if (!m_running)
-            break;
     }
 
     // Apply the resize request
