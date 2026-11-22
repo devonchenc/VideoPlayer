@@ -29,8 +29,7 @@ enum class RenderWaitResult
     StopRequested,
     CommandReceived,
     PlaybackStateChanged,
-    VideoFrameAvailable,
-    TimerExpired,
+    RenderReady,
     Failed
 };
 
@@ -57,15 +56,15 @@ public:
     void Shutdown();
 
 private:
-    void RenderThread(std::stop_token stopToken);
-    void ProcessPendingCommands(std::stop_token stopToken);
-    void ProcessVideoFrames(std::stop_token stopToken);
+    void RenderThread();
+    void ProcessVideoFrames();
     DWORD CalculateNextWakeUpTimeout() const;
-    RenderWaitResult WaitForRenderEvents(DWORD timeoutMs);
+    void ProcessPendingCommands();
 
 private:
     std::mutex m_mutex;
-    std::jthread m_renderThread;
+    std::thread m_renderThread;
+    std::atomic<bool> m_running{ false };
 
     std::mutex m_commandMutex;
     std::queue<PlayerCommand> m_commandQueue;

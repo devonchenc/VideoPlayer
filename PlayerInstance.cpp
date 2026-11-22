@@ -74,7 +74,8 @@ HRESULT CPlayerInstance::Initialize(HWND parentWnd)
         return HRESULT_FROM_WIN32(GetLastError());
 
     // Start rendering thread
-    m_renderThread = std::jthread([this](std::stop_token stopToken) { RenderThread(stopToken); });
+    m_running = true;
+    m_renderThread = std::thread(&CPlayerInstance::RenderThread, this);
 
     m_initialized = true;
 
@@ -150,96 +151,88 @@ HRESULT CPlayerInstance::PlayResume()
 
 void CPlayerInstance::Shutdown()
 {
+    m_running = false;
+
     SetEvent(m_stopEvent);
 
     if (m_renderThread.joinable())
-    {
-        m_renderThread.request_stop();
         m_renderThread.join();
-    }
 }
 
-void CPlayerInstance::RenderThread(std::stop_token stopToken)
+void CPlayerInstance::RenderThread()
 {
-    while (!stopToken.stop_requested())
+    while (m_running)
     {
         // Process video frames
-        ProcessVideoFrames(stopToken);
+        ProcessVideoFrames();
 
-        if (stopToken.stop_requested())
+        if (!m_running)
             break;
 
         // Calculate the next wakeup time
         const DWORD timeoutMs = CalculateNextWakeUpTimeout();
-        const RenderWaitResult result = WaitForRenderEvents(timeoutMs);
 
-        if (result == RenderWaitResult::StopRequested)
-            break;
-        else if (result == RenderWaitResult::PlaybackStateChanged)
+        // Configure the render timer
+        if (timeoutMs == INFINITE || timeoutMs == 0)
         {
-            m_pendingVideoFrame.reset();
+            CancelWaitableTimer(m_renderTimer);
         }
-        else if (result == RenderWaitResult::CommandReceived)
+        else
         {
-            ProcessPendingCommands(stopToken);
+            LARGE_INTEGER dueTime{};
+            dueTime.QuadPart = -static_cast<LONGLONG>(timeoutMs) * 10000LL;
+
+            if (!SetWaitableTimer(m_renderTimer, &dueTime, 0, nullptr, nullptr, FALSE))
+            {
+                OutputDebugStringW(L"Failed to set waitable timer.\n");
+                continue;
+            }
+        }
+
+        constexpr DWORD count = 4;
+        HANDLE handles[count]{};
+        handles[0] = m_stopEvent;
+        handles[1] = m_commandEvent;
+        handles[2] = m_playbackEngine->GetStateChangedEvent();
+
+        if (!m_pendingVideoFrame)
+        {
+            // Wait for a new video frame only when there is no pending frame
+            handles[3] = m_playbackEngine->GetVideoFrameEvent();
+        }
+        else
+        {
+            handles[3] = m_renderTimer;
+        }
+
+        const DWORD result = WaitForMultipleObjects(count, handles, FALSE, INFINITE);
+        switch (result)
+        {
+        case WAIT_OBJECT_0:
+            m_running = false;
+            break;
+        case WAIT_OBJECT_0 + 1:
+            ProcessPendingCommands();
+            break;
+        case WAIT_OBJECT_0 + 2:
+            m_pendingVideoFrame.reset();
+            break;
+        case WAIT_OBJECT_0 + 3:
+            break;
+        default:
+            OutputDebugStringW(L"Failed");
+            continue;
         }
     }
 
     m_renderer->Shutdown();
 }
 
-void CPlayerInstance::ProcessPendingCommands(std::stop_token stopToken)
-{
-    std::queue<PlayerCommand> commands;
-
-    {
-        std::lock_guard lock(m_commandMutex);
-
-        commands.swap(m_commandQueue);
-        ResetEvent(m_commandEvent);
-    }
-
-    std::optional<SIZE> pendingResize;
-
-    while (!commands.empty())
-    {
-        PlayerCommand command = std::move(commands.front());
-        commands.pop();
-
-        switch (command.type)
-        {
-        case PlayerCommandType::Resize:
-            pendingResize = SIZE(command.width, command.height);
-            break;
-        case PlayerCommandType::Clear:
-            break;
-        default:
-            break;
-        }
-
-        if (stopToken.stop_requested())
-            break;
-    }
-
-    // Apply the resize request
-    if (pendingResize.has_value())
-    {
-        HRESULT hr = m_renderer->Resize(pendingResize.value().cx, pendingResize.value().cy);
-        if (FAILED(hr))
-        {
-            OutputDebugStringW(L"Renderer resize failed\n");
-        }
-    }
-}
-
-void CPlayerInstance::ProcessVideoFrames(std::stop_token stopToken)
+void CPlayerInstance::ProcessVideoFrames()
 {
     // Only process video frames while playing
-    while (m_playbackEngine->GetPlaybackState() == PlaybackState::Playing)
+    while (m_running && m_playbackEngine->GetPlaybackState() == PlaybackState::Playing)
     {
-        if (stopToken.stop_requested())
-            return;
-
         // Get the next frame if there is no pending frame
         if (!m_pendingVideoFrame)
         {
@@ -301,55 +294,46 @@ DWORD CPlayerInstance::CalculateNextWakeUpTimeout() const
     return static_cast<DWORD>(std::ceil(waitSeconds * 1000.0));
 }
 
-RenderWaitResult CPlayerInstance::WaitForRenderEvents(DWORD timeoutMs)
+void CPlayerInstance::ProcessPendingCommands()
 {
-    // Configure the render timer
-    if (timeoutMs == INFINITE || timeoutMs == 0)
-    {
-        CancelWaitableTimer(m_renderTimer);
-    }
-    else
-    {
-        LARGE_INTEGER dueTime{};
-        dueTime.QuadPart = -static_cast<LONGLONG>(timeoutMs) * 10'000;
+    std::queue<PlayerCommand> commands;
 
-        if (!SetWaitableTimer(m_renderTimer, &dueTime, 0, nullptr, nullptr, FALSE))
+    {
+        std::lock_guard lock(m_commandMutex);
+
+        commands.swap(m_commandQueue);
+        ResetEvent(m_commandEvent);
+    }
+
+    std::optional<SIZE> pendingResize;
+
+    while (!commands.empty())
+    {
+        PlayerCommand command = std::move(commands.front());
+        commands.pop();
+
+        switch (command.type)
         {
-            return RenderWaitResult::Failed;
+        case PlayerCommandType::Resize:
+            pendingResize = SIZE(command.width, command.height);
+            break;
+        case PlayerCommandType::Clear:
+            break;
+        default:
+            break;
         }
+
+        if (!m_running)
+            break;
     }
 
-    constexpr DWORD count = 4;
-    HANDLE handles[count]{};
-    handles[0] = m_stopEvent;
-    handles[1] = m_commandEvent;
-    handles[2] = m_playbackEngine->GetStateChangedEvent();
-
-    if (!m_pendingVideoFrame)
+    // Apply the resize request
+    if (pendingResize.has_value())
     {
-        // Wait for a new video frame only when there is no pending frame
-        handles[3] = m_playbackEngine->GetVideoFrameEvent();
-    }
-    else
-    {
-        handles[3] = m_renderTimer;
-    }
-
-    const DWORD result = WaitForMultipleObjects(count, handles, FALSE, INFINITE);
-    switch (result)
-    {
-    case WAIT_OBJECT_0:
-        return RenderWaitResult::StopRequested;
-    case WAIT_OBJECT_0 + 1:
-        return RenderWaitResult::CommandReceived;
-    case WAIT_OBJECT_0 + 2:
-        return RenderWaitResult::PlaybackStateChanged;
-    case WAIT_OBJECT_0 + 3:
-        if (!m_pendingVideoFrame)
-            return RenderWaitResult::VideoFrameAvailable;
-        else
-            return RenderWaitResult::TimerExpired;
-    default:
-        return RenderWaitResult::Failed;
+        HRESULT hr = m_renderer->Resize(pendingResize.value().cx, pendingResize.value().cy);
+        if (FAILED(hr))
+        {
+            OutputDebugStringW(L"Renderer resize failed\n");
+        }
     }
 }
