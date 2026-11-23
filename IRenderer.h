@@ -23,4 +23,5 @@ protected:
     UINT m_videoHeight{ 0 };
     UINT m_windowWidth{ 0 };
     UINT m_windowHeight{ 0 };
+    bool m_isMinimized{ false };
 };

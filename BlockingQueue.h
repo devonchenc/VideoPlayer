@@ -1,8 +1,8 @@
 #pragma once
 
 #include <condition_variable>
-#include <deque>
 #include <mutex>
+#include <queue>
 #include <stop_token>
 
 template<class T>
@@ -42,11 +42,9 @@ public:
                 return false;
 
             if (m_dropOldestWhenFull && m_queue.size() >= m_capacity)
-            {
-                m_queue.pop_front();
-            }
+                m_queue.pop();
 
-            m_queue.push_back(std::move(item));
+            m_queue.push(std::move(item));
         }
 
         m_notEmpty.notify_one();
@@ -65,7 +63,7 @@ public:
                 return false;
 
             item = std::move(m_queue.front());
-            m_queue.pop_front();
+            m_queue.pop();
         }
 
         m_notFull.notify_one();
@@ -82,7 +80,7 @@ public:
                 return false;
 
             item = std::move(m_queue.front());
-            m_queue.pop_front();
+            m_queue.pop();
         }
 
         m_notFull.notify_one();
@@ -114,8 +112,9 @@ public:
 
     void Clear()
     {
+        std::queue<T> q;
         std::lock_guard lock(m_mutex);
-        m_queue.clear();
+        q.swap(m_queue);
     }
 
     void Close()
@@ -132,8 +131,9 @@ public:
     void Reset()
     {
         {
+            std::queue<T> q;
             std::lock_guard lock(m_mutex);
-            m_queue.clear();
+            q.swap(m_queue);
             m_closed = false;
         }
 
@@ -145,7 +145,7 @@ private:
     mutable std::mutex m_mutex;
     std::condition_variable_any m_notEmpty;
     std::condition_variable_any m_notFull;
-    std::deque<T> m_queue;
+    std::queue<T> m_queue;
     std::size_t m_capacity{ 0 };
     bool m_closed{ false };
     bool m_dropOldestWhenFull{ false };

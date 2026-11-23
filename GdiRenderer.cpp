@@ -14,7 +14,12 @@ HRESULT CGdiRenderer::Initialize(HWND hwnd)
 HRESULT CGdiRenderer::Resize(UINT width, UINT height)
 {
     if (width == 0 || height == 0)
-        return S_FALSE;
+    {
+        m_isMinimized = true;
+        return S_OK;
+    }
+
+    m_isMinimized = false;
 
     if (width == m_windowWidth && height == m_windowHeight)
         return S_OK;
@@ -27,13 +32,13 @@ HRESULT CGdiRenderer::Resize(UINT width, UINT height)
 
 HRESULT CGdiRenderer::UploadVideoFrame(AVFrame* frame)
 {
-    if (!frame)
+    if (m_isMinimized)
+        return S_OK;
+
+    if (!frame || !frame->data[0])
         return E_POINTER;
 
     if (frame->format != AV_PIX_FMT_BGRA)
-        return E_INVALIDARG;
-
-    if (frame->width <= 0 || frame->height <= 0)
         return E_INVALIDARG;
 
     const int width = frame->width;
@@ -41,7 +46,7 @@ HRESULT CGdiRenderer::UploadVideoFrame(AVFrame* frame)
     const int srcStride = frame->linesize[0];
     const int dstStride = width * 4;
 
-    if (!frame->data[0] || srcStride < dstStride)
+    if (srcStride < dstStride)
         return E_INVALIDARG;
 
     size_t bufferSize = static_cast<size_t>(dstStride) * height;
@@ -63,6 +68,9 @@ HRESULT CGdiRenderer::UploadVideoFrame(AVFrame* frame)
 
 HRESULT CGdiRenderer::Render()
 {
+    if (m_isMinimized)
+        return S_OK;
+
     if (!m_hwnd)
         return E_FAIL;
 
@@ -80,7 +88,6 @@ HRESULT CGdiRenderer::Render()
     const int dstX = (m_windowWidth - dstWidth) / 2;
     const int dstY = (m_windowHeight - dstHeight) / 2;
 
-    // Configure DIB
     BITMAPINFO bmi{};
     bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
     bmi.bmiHeader.biWidth = m_videoWidth;
@@ -90,9 +97,9 @@ HRESULT CGdiRenderer::Render()
     bmi.bmiHeader.biCompression = BI_RGB;
     bmi.bmiHeader.biSizeImage = static_cast<DWORD>(m_videoBuffer.size());
 
-    SetStretchBltMode(hdc, COLORONCOLOR);
+    SetStretchBltMode(hdc, HALFTONE);
+    SetBrushOrgEx(hdc, 0, 0, nullptr);
 
-    // Draw video frame
     int result = StretchDIBits(hdc, dstX, dstY, dstWidth, dstHeight, 0, 0,
         m_videoWidth, m_videoHeight, m_videoBuffer.data(), &bmi, DIB_RGB_COLORS, SRCCOPY);
 

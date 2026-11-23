@@ -17,19 +17,11 @@ namespace
 
 CPlaybackEngine::CPlaybackEngine()
 {
-    m_videoFrameEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
-    m_stateChangedEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
 }
 
 CPlaybackEngine::~CPlaybackEngine()
 {
     Shutdown();
-
-    if (m_videoFrameEvent)
-        CloseHandle(m_videoFrameEvent);
-
-    if (m_stateChangedEvent)
-        CloseHandle(m_stateChangedEvent);
 }
 
 bool CPlaybackEngine::Initialize()
@@ -39,6 +31,20 @@ bool CPlaybackEngine::Initialize()
     m_decodedFrame.reset(av_frame_alloc());
     if (!m_decodedFrame)
         return false;
+
+    if (!m_videoFrameEvent)
+    {
+        m_videoFrameEvent.reset(CreateEvent(nullptr, TRUE, FALSE, nullptr));
+        if (!m_videoFrameEvent)
+            return HRESULT_FROM_WIN32(GetLastError());
+    }
+
+    if (!m_stateChangedEvent)
+    {
+        m_stateChangedEvent.reset(CreateEvent(nullptr, FALSE, FALSE, nullptr));
+        if (!m_stateChangedEvent)
+            return HRESULT_FROM_WIN32(GetLastError());
+    }
 
     m_videoPacketQueue.Reset();
     m_videoFrameQueue.Reset();
@@ -51,6 +57,29 @@ bool CPlaybackEngine::Initialize()
     m_videoClockStarted = false;
 
     return true;
+}
+
+void CPlaybackEngine::Shutdown()
+{
+    m_stopSource.request_stop();
+
+    m_videoPacketQueue.Close();
+    m_videoFrameQueue.Close();
+
+    if (m_demuxThread.joinable())
+        m_demuxThread.join();
+
+    if (m_videoDecodeThread.joinable())
+        m_videoDecodeThread.join();
+
+    m_videoCodecContext.reset();
+    m_formatContext.reset();
+
+    m_videoAVStream = nullptr;
+    m_videoStreamIndex = -1;
+
+    m_videoClockStarted = false;
+    m_videoDone = false;
 }
 
 bool CPlaybackEngine::PlayLive(const std::string& url)
@@ -66,7 +95,7 @@ bool CPlaybackEngine::PlayLive(const std::string& url)
         m_playbackState = PlaybackState::Playing;
     }
 
-    SetEvent(m_stateChangedEvent);
+    SetEvent(m_stateChangedEvent.get());
 
     StartThreads();
 
@@ -86,7 +115,7 @@ bool CPlaybackEngine::PlayRecorded(const std::string& url)
         m_playbackState = PlaybackState::Playing;
     }
 
-    SetEvent(m_stateChangedEvent);
+    SetEvent(m_stateChangedEvent.get());
 
     StartThreads();
 
@@ -96,7 +125,7 @@ bool CPlaybackEngine::PlayRecorded(const std::string& url)
 void CPlaybackEngine::PlayStop()
 {
     m_playbackState = PlaybackState::Stopped;
-    SetEvent(m_stateChangedEvent);
+    SetEvent(m_stateChangedEvent.get());
 }
 
 void CPlaybackEngine::PlayPause()
@@ -111,7 +140,7 @@ void CPlaybackEngine::PlayPause()
     }
 
     m_playbackState = PlaybackState::Paused;
-    SetEvent(m_stateChangedEvent);
+    SetEvent(m_stateChangedEvent.get());
 }
 
 void CPlaybackEngine::PlayResume()
@@ -127,31 +156,9 @@ void CPlaybackEngine::PlayResume()
     }
 
     m_playbackState = PlaybackState::Playing;
-    SetEvent(m_stateChangedEvent);
+    SetEvent(m_stateChangedEvent.get());
 
     NotifyDataReady();
-}
-
-void CPlaybackEngine::Shutdown()
-{
-    m_stopSource.request_stop();
-
-    m_videoPacketQueue.Close();
-    m_videoFrameQueue.Close();
-
-    if (m_demuxThread.joinable())
-        m_demuxThread.join();
-    if (m_videoDecodeThread.joinable())
-        m_videoDecodeThread.join();
-
-    m_videoCodecContext.reset();
-    m_formatContext.reset();
-
-    m_videoAVStream = nullptr;
-    m_videoStreamIndex = -1;
-
-    m_videoClockStarted = false;
-    m_videoDone = false;
 }
 
 void CPlaybackEngine::StartThreads()
@@ -432,7 +439,7 @@ bool CPlaybackEngine::FlushVideoDecoder(std::stop_token stopToken)
 void CPlaybackEngine::NotifyDataReady()
 {
     // Notify Render Thread
-    SetEvent(m_videoFrameEvent);
+    SetEvent(m_videoFrameEvent.get());
 }
 
 double CPlaybackEngine::NormalizeTimestamp(std::int64_t timestamp, AVRational timeBase) const
@@ -480,7 +487,7 @@ bool CPlaybackEngine::TryGetVideoFrame(VideoFrame& frame)
     bool result = m_videoFrameQueue.TryPop(frame);
     if (!result)
     {
-        ResetEvent(m_videoFrameEvent);
+        ResetEvent(m_videoFrameEvent.get());
         return false;
     }
 
@@ -524,7 +531,13 @@ bool CPlaybackEngine::ConvertFrameToBGRA(AVFrame* srcFrame, AVFrame* rgbFrame)
     const AVPixelFormat srcFormat = static_cast<AVPixelFormat>(srcFrame->format);
 
     // Update SwsContext if the source properties have changed
-    m_swsContext = sws_getCachedContext(m_swsContext, width, height, srcFormat, width, height, AV_PIX_FMT_BGRA, SWS_BILINEAR, nullptr, nullptr, nullptr);
+    SwsContext* newCtx = sws_getCachedContext(m_swsContext.get(), width, height, srcFormat, width, height, AV_PIX_FMT_BGRA, SWS_BILINEAR, nullptr, nullptr, nullptr);
+    if (newCtx != m_swsContext.get())
+    {
+        m_swsContext.release();
+        m_swsContext.reset(newCtx);
+    }
+
     if (!m_swsContext)
         return false;
 
@@ -538,7 +551,7 @@ bool CPlaybackEngine::ConvertFrameToBGRA(AVFrame* srcFrame, AVFrame* rgbFrame)
         return false;
 
     // Convert source frame to BGRA
-    const int outputHeight = sws_scale(m_swsContext, srcFrame->data, srcFrame->linesize, 0, height, rgbFrame->data, rgbFrame->linesize);
+    const int outputHeight = sws_scale(m_swsContext.get(), srcFrame->data, srcFrame->linesize, 0, height, rgbFrame->data, rgbFrame->linesize);
     if (outputHeight != height)
     {
         av_frame_unref(rgbFrame);

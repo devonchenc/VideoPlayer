@@ -36,9 +36,15 @@ HRESULT CPlayerInstance::Initialize(HWND parentWnd)
         return S_OK;
 
     m_commandEvent.reset(CreateEvent(nullptr, TRUE, FALSE, nullptr));
+    if (!m_commandEvent)
+        return HRESULT_FROM_WIN32(GetLastError());
+
     m_stopEvent.reset(CreateEvent(nullptr, TRUE, FALSE, nullptr));
+    if (!m_stopEvent)
+        return HRESULT_FROM_WIN32(GetLastError());
+
     m_renderTimer.reset(CreateWaitableTimerEx(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_MODIFY_STATE | SYNCHRONIZE));
-    if (!m_commandEvent || !m_stopEvent || !m_renderTimer)
+    if (!m_renderTimer)
         return HRESULT_FROM_WIN32(GetLastError());
 
     m_playbackEngine = std::make_unique<CPlaybackEngine>();
@@ -151,7 +157,6 @@ void CPlayerInstance::RenderThread()
 {
     while (m_running)
     {
-        // Process video frames
         ProcessVideoFrames();
 
         if (!m_running)

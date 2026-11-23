@@ -31,17 +31,17 @@ public:
 
 public:
     bool Initialize();
+    void Shutdown();
     bool PlayLive(const std::string& url);
     bool PlayRecorded(const std::string& url);
     void PlayStop();
     void PlayPause();
     void PlayResume();
-    void Shutdown();
 
-    double GetMasterClock() const;
     bool TryGetVideoFrame(VideoFrame& frame);
-    HANDLE GetVideoFrameEvent() const { return m_videoFrameEvent; }
-    HANDLE GetStateChangedEvent() const { return m_stateChangedEvent; }
+    double GetMasterClock() const;
+    HANDLE GetVideoFrameEvent() const { return m_videoFrameEvent.get(); }
+    HANDLE GetStateChangedEvent() const { return m_stateChangedEvent.get(); }
     PlaybackState GetPlaybackState() const { return m_playbackState; }
 
 private:
@@ -77,14 +77,14 @@ private:
     int m_videoStreamIndex{ -1 };
     double m_timestampOrigin{ 0.0 };
 
-    HANDLE m_videoFrameEvent{ nullptr };
-    HANDLE m_stateChangedEvent{ nullptr };
+    HandlePtr m_videoFrameEvent{ nullptr };
+    HandlePtr m_stateChangedEvent{ nullptr };
 
     // Queues
     CBlockingQueue<PacketPtr> m_videoPacketQueue{ 128 };
     CBlockingQueue<VideoFrame> m_videoFrameQueue{ 30 };
 
-    SwsContext* m_swsContext{ nullptr };
+    SwsPtr m_swsContext{ nullptr };
 
     // Worker threads
     std::jthread m_demuxThread;

@@ -44,9 +44,7 @@ private:
     HRESULT CreatePipelineState();
     HRESULT CompileShader(const std::wstring& filename, const char* entryPoint, const char* target, ComPtr<ID3DBlob>& shaderBlob);
     HRESULT CreateVideoSrvHeap();
-    void CreateVideoSrv();
     HRESULT CreateVideoTexture(UINT width, UINT height);
-    HRESULT CreateUploadBuffer(UINT64 size, ComPtr<ID3D12Resource>& buffer);
     D3D12_VIEWPORT CalculateViewport();
     HRESULT CopyVideoPlanesToGpu();
     HRESULT WaitForFence(UINT64 fenceValue);
@@ -61,6 +59,7 @@ private:
 
     // SwapChain Back Buffer RTVs
     ComPtr<ID3D12DescriptorHeap> m_rtvHeap;
+    UINT m_rtvDescriptorSize{ 0 };
     std::array<D3D12_CPU_DESCRIPTOR_HANDLE, FRAME_COUNT> m_rtvHandles;
     std::array<ComPtr<ID3D12Resource>, FRAME_COUNT> m_renderTargets;
     std::array<FrameContext, FRAME_COUNT> m_frames;
@@ -70,8 +69,6 @@ private:
     UINT64 m_nextFenceValue{ 0 };
     UINT64 m_uploadFenceValue{ 0 };
     HANDLE m_fenceEvent{ nullptr };
-
-    UINT m_rtvDescriptorSize{ 0 };
 
     // Texture
     ComPtr<ID3D12Resource> m_videoTexture;

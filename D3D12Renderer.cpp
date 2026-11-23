@@ -6,6 +6,11 @@
 
 #pragma comment(lib, "D3DCompiler.lib")
 
+namespace
+{
+    constexpr DXGI_FORMAT BUFFER_FORMAT = DXGI_FORMAT_B8G8R8A8_UNORM;
+}
+
 HRESULT CD3D12Renderer::Initialize(HWND hwnd)
 {
     if (!hwnd || !IsWindow(hwnd))
@@ -40,7 +45,12 @@ HRESULT CD3D12Renderer::Initialize(HWND hwnd)
 HRESULT CD3D12Renderer::Resize(UINT width, UINT height)
 {
     if (width == 0 || height == 0)
-        return S_FALSE;
+    {
+        m_isMinimized = true;
+        return S_OK;
+    }
+
+    m_isMinimized = false;
 
     if (!m_swapChain)
         return InitializeSwapChain(width, height);
@@ -58,7 +68,7 @@ HRESULT CD3D12Renderer::Resize(UINT width, UINT height)
         renderTarget.Reset();
 
     // Resize swap chain buffers
-    hr = m_swapChain->ResizeBuffers(FRAME_COUNT, width, height, DXGI_FORMAT_R8G8B8A8_UNORM, 0);
+    hr = m_swapChain->ResizeBuffers(FRAME_COUNT, width, height, BUFFER_FORMAT, 0);
     if (FAILED(hr))
         return hr;
 
@@ -70,13 +80,15 @@ HRESULT CD3D12Renderer::Resize(UINT width, UINT height)
     if (FAILED(hr))
         return hr;
 
-    // Recreate render target views
     return S_OK;
 }
 
 HRESULT CD3D12Renderer::UploadVideoFrame(AVFrame* frame)
 {
-    if (!frame)
+    if (m_isMinimized)
+        return S_OK;
+
+    if (!frame || !frame->data[0])
         return E_INVALIDARG;
 
     if (frame->format != AV_PIX_FMT_BGRA)
@@ -84,12 +96,6 @@ HRESULT CD3D12Renderer::UploadVideoFrame(AVFrame* frame)
 
     const UINT videoWidth = frame->width;
     const UINT videoHeight = frame->height;
-
-    if (videoWidth == 0 || videoHeight == 0)
-        return E_INVALIDARG;
-
-    if (!frame->data[0])
-        return E_INVALIDARG;
 
     if (frame->linesize[0] < static_cast<int>(videoWidth * 4))
         return E_INVALIDARG;
@@ -113,7 +119,14 @@ HRESULT CD3D12Renderer::UploadVideoFrame(AVFrame* frame)
         if (FAILED(hr))
             return hr;
 
-        CreateVideoSrv();
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Texture2D.MostDetailedMip = 0;
+        srvDesc.Texture2D.MipLevels = 1;
+        srvDesc.Format = BUFFER_FORMAT;
+
+        m_device->CreateShaderResourceView(m_videoTexture.Get(), &srvDesc, m_videoTextureSrvHandle);
 
         m_videoWidth = videoWidth;
         m_videoHeight = videoHeight;
@@ -155,6 +168,9 @@ HRESULT CD3D12Renderer::UploadVideoFrame(AVFrame* frame)
 
 HRESULT CD3D12Renderer::Render()
 {
+    if (m_isMinimized)
+        return S_OK;
+
     if (!m_swapChain || !m_pipelineState)
         return E_UNEXPECTED;
 
@@ -359,7 +375,7 @@ HRESULT CD3D12Renderer::CreateSwapChain(HWND hwnd)
     DXGI_SWAP_CHAIN_DESC1 desc{};
     desc.Width = m_windowWidth;
     desc.Height = m_windowHeight;
-    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.Format = BUFFER_FORMAT;
     desc.Stereo = FALSE;
     desc.SampleDesc.Count = 1;
     desc.SampleDesc.Quality = 0;
@@ -420,13 +436,11 @@ HRESULT CD3D12Renderer::CreateRootSignature()
 {
     // 1. Define SRV Descriptor Range
     D3D12_DESCRIPTOR_RANGE srvRange{};
-
     srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     srvRange.NumDescriptors = 3;
     srvRange.BaseShaderRegister = 0;
     srvRange.RegisterSpace = 0;
-    srvRange.OffsetInDescriptorsFromTableStart =
-        D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+    srvRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
     // 2. Define Root Parameter
     D3D12_ROOT_PARAMETER rootParameter{};
@@ -546,7 +560,7 @@ HRESULT CD3D12Renderer::CreatePipelineState()
 
     // 8. Render Target
     psoDesc.NumRenderTargets = 1;
-    psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    psoDesc.RTVFormats[0] = BUFFER_FORMAT;
     psoDesc.DSVFormat = DXGI_FORMAT_UNKNOWN;
 
     // 9. Multisampling
@@ -603,18 +617,6 @@ HRESULT CD3D12Renderer::CreateVideoSrvHeap()
     return S_OK;
 }
 
-void CD3D12Renderer::CreateVideoSrv()
-{
-    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-    srvDesc.Texture2D.MostDetailedMip = 0;
-    srvDesc.Texture2D.MipLevels = 1;
-    srvDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-
-    m_device->CreateShaderResourceView(m_videoTexture.Get(), &srvDesc, m_videoTextureSrvHandle);
-}
-
 HRESULT CD3D12Renderer::CreateVideoTexture(UINT width, UINT height)
 {
     if (width == 0 || height == 0)
@@ -629,7 +631,7 @@ HRESULT CD3D12Renderer::CreateVideoTexture(UINT width, UINT height)
     textureDesc.Height = height;
     textureDesc.DepthOrArraySize = 1;
     textureDesc.MipLevels = 1;
-    textureDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    textureDesc.Format = BUFFER_FORMAT;
     textureDesc.SampleDesc.Count = 1;
     textureDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
     textureDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
@@ -666,23 +668,6 @@ HRESULT CD3D12Renderer::CreateVideoTexture(UINT width, UINT height)
     m_videoTexturesInShaderState = false;
 
     return S_OK;
-}
-
-HRESULT CD3D12Renderer::CreateUploadBuffer(UINT64 size, ComPtr<ID3D12Resource>& buffer)
-{
-    D3D12_HEAP_PROPERTIES heapProperties{};
-    heapProperties.Type = D3D12_HEAP_TYPE_UPLOAD;
-
-    D3D12_RESOURCE_DESC desc{};
-    desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-    desc.Width = size;
-    desc.Height = 1;
-    desc.DepthOrArraySize = 1;
-    desc.MipLevels = 1;
-    desc.SampleDesc.Count = 1;
-    desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-    return m_device->CreateCommittedResource(&heapProperties, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&buffer));
 }
 
 D3D12_VIEWPORT CD3D12Renderer::CalculateViewport()
