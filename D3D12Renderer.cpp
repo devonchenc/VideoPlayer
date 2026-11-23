@@ -275,7 +275,7 @@ HRESULT CD3D12Renderer::Render()
 
 void CD3D12Renderer::Shutdown()
 {
-    if (m_commandQueue && m_fence && m_fenceEvent)
+    if (m_commandQueue && m_fence && m_fenceEvent.get())
         WaitForGpu();
 
     m_renderCommandList.Reset();
@@ -291,12 +291,6 @@ void CD3D12Renderer::Shutdown()
     m_swapChain.Reset();
 
     m_fence.Reset();
-
-    if (m_fenceEvent)
-    {
-        CloseHandle(m_fenceEvent);
-        m_fenceEvent = nullptr;
-    }
 }
 
 HRESULT CD3D12Renderer::CreateCommandObjects()
@@ -340,7 +334,7 @@ HRESULT CD3D12Renderer::CreateFence()
     if (FAILED(hr))
         return hr;
 
-    m_fenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+    m_fenceEvent.reset(CreateEvent(nullptr, FALSE, FALSE, nullptr));
     if (!m_fenceEvent)
         return HRESULT_FROM_WIN32(GetLastError());
 
@@ -758,11 +752,11 @@ HRESULT CD3D12Renderer::WaitForFence(UINT64 fenceValue)
     if (m_fence->GetCompletedValue() >= fenceValue)
         return S_OK;
 
-    HRESULT hr = m_fence->SetEventOnCompletion(fenceValue, m_fenceEvent);
+    HRESULT hr = m_fence->SetEventOnCompletion(fenceValue, m_fenceEvent.get());
     if (FAILED(hr))
         return hr;
 
-    DWORD result = WaitForSingleObject(m_fenceEvent, INFINITE);
+    DWORD result = WaitForSingleObject(m_fenceEvent.get(), INFINITE);
     if (result != WAIT_OBJECT_0)
         return HRESULT_FROM_WIN32(result == WAIT_FAILED ? GetLastError() : ERROR_GEN_FAILURE);
 
@@ -782,11 +776,11 @@ HRESULT CD3D12Renderer::WaitForGpu()
 
     if (m_fence->GetCompletedValue() < fenceValue)
     {
-        hr = m_fence->SetEventOnCompletion(fenceValue, m_fenceEvent);
+        hr = m_fence->SetEventOnCompletion(fenceValue, m_fenceEvent.get());
         if (FAILED(hr))
             return hr;
 
-        const DWORD waitResult = WaitForSingleObject(m_fenceEvent, INFINITE);
+        const DWORD waitResult = WaitForSingleObject(m_fenceEvent.get(), INFINITE);
 
         if (waitResult != WAIT_OBJECT_0)
             return HRESULT_FROM_WIN32(waitResult == WAIT_FAILED ? GetLastError() : ERROR_GEN_FAILURE);

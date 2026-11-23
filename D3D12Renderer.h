@@ -8,6 +8,7 @@
 #include <dxgi1_6.h>
 #include <d3d12.h>
 #include "IRenderer.h"
+#include "ResourceUtils.h"
 
 #pragma comment(lib, "d3d12.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -68,7 +69,7 @@ private:
 
     UINT64 m_nextFenceValue{ 0 };
     UINT64 m_uploadFenceValue{ 0 };
-    HANDLE m_fenceEvent{ nullptr };
+    HandlePtr m_fenceEvent{ nullptr };
 
     // Texture
     ComPtr<ID3D12Resource> m_videoTexture;
