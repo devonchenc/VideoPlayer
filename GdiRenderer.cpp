@@ -1,6 +1,11 @@
 #include "GdiRenderer.h"
 #include "ResourceUtils.h"
 
+namespace
+{
+    constexpr int BGRA_BYTES_PER_PIXEL = 4;
+}
+
 HRESULT CGdiRenderer::Initialize(HWND hwnd)
 {
     if (!hwnd || !IsWindow(hwnd))
@@ -41,27 +46,34 @@ HRESULT CGdiRenderer::UploadVideoFrame(AVFrame* frame)
     if (frame->format != AV_PIX_FMT_BGRA)
         return E_INVALIDARG;
 
-    const int width = frame->width;
-    const int height = frame->height;
+    const int videoWidth = frame->width;
+    const int videoHeight = frame->height;
     const int srcStride = frame->linesize[0];
-    const int dstStride = width * 4;
+    const int dstStride = videoWidth * BGRA_BYTES_PER_PIXEL;
 
-    if (srcStride < dstStride)
+    if (std::abs(srcStride) < dstStride)
         return E_INVALIDARG;
 
-    size_t bufferSize = static_cast<size_t>(dstStride) * height;
+    size_t bufferSize = static_cast<size_t>(dstStride) * videoHeight;
     m_videoBuffer.resize(bufferSize);
 
-    // Copy BGRA data row by row
-    for (int y = 0; y < height; ++y)
+    if (srcStride > 0 && srcStride == dstStride)
     {
-        const uint8_t* src = frame->data[0] + y * srcStride;
-        uint8_t* dst = m_videoBuffer.data() + y * dstStride;
-        memcpy_s(dst, bufferSize, src, dstStride);
+        memcpy_s(m_videoBuffer.data(), bufferSize, frame->data[0], bufferSize);
+    }
+    else
+    {
+        // Copy BGRA data row by row
+        for (int y = 0; y < videoHeight; ++y)
+        {
+            const uint8_t* src = frame->data[0] + y * srcStride;
+            uint8_t* dst = m_videoBuffer.data() + y * dstStride;
+            memcpy_s(dst, dstStride, src, dstStride);
+        }
     }
 
-    m_videoWidth = width;
-    m_videoHeight = height;
+    m_videoWidth = videoWidth;
+    m_videoHeight = videoHeight;
 
     return S_OK;
 }

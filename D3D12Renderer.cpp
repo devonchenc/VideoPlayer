@@ -8,6 +8,7 @@
 
 namespace
 {
+    constexpr int BGRA_BYTES_PER_PIXEL = 4;
     constexpr DXGI_FORMAT BUFFER_FORMAT = DXGI_FORMAT_B8G8R8A8_UNORM;
 }
 
@@ -53,7 +54,24 @@ HRESULT CD3D12Renderer::Resize(UINT width, UINT height)
     m_isMinimized = false;
 
     if (!m_swapChain)
-        return InitializeSwapChain(width, height);
+    {
+        HRESULT hr = CreateSwapChain(m_hwnd, width, height);
+        if (FAILED(hr))
+            return hr;
+
+        hr = CreateRenderTargetViews();
+        if (FAILED(hr))
+            return hr;
+
+        hr = CreateVideoSrvHeap();
+        if (FAILED(hr))
+            return hr;
+
+        m_windowWidth = width;
+        m_windowHeight = height;
+
+        return S_OK;
+    }
 
     if (width == m_windowWidth && height == m_windowHeight)
         return S_OK;
@@ -96,11 +114,16 @@ HRESULT CD3D12Renderer::UploadVideoFrame(AVFrame* frame)
 
     const UINT videoWidth = frame->width;
     const UINT videoHeight = frame->height;
+    const int srcStride = frame->linesize[0];
+    const UINT rowBytes = videoWidth * BGRA_BYTES_PER_PIXEL;
 
-    if (frame->linesize[0] < static_cast<int>(videoWidth * 4))
+    if (std::abs(srcStride) < static_cast<int>(rowBytes))
         return E_INVALIDARG;
 
-    // 1. Recreate resources if video format or size changes
+    if (!m_swapChain)
+        return E_POINTER;
+
+    // Recreate resources if video format or size changes
     if (!m_videoTexture || m_videoWidth != videoWidth || m_videoHeight != videoHeight)
     {
         // Wait for previous GPU usage before releasing old textures
@@ -133,7 +156,7 @@ HRESULT CD3D12Renderer::UploadVideoFrame(AVFrame* frame)
     }
 
     HRESULT hr;
-    // 2. Wait until previous GPU usage has completed
+    // Wait until previous GPU usage has completed
     if (m_uploadFenceValue != 0)
     {
         hr = WaitForFence(m_uploadFenceValue);
@@ -141,28 +164,23 @@ HRESULT CD3D12Renderer::UploadVideoFrame(AVFrame* frame)
             return hr;
     }
 
-    // 3. Map upload buffers
-    void* mappedData = nullptr;
-    D3D12_RANGE readRange{ 0, 0 };
-    hr = m_videoUploadBuffer->Map(0, &readRange, reinterpret_cast<void**>(&mappedData));
-    if (FAILED(hr))
-        return hr;
-
-    // 4. Copy BGRA pixels row by row
-    const UINT rowSize = videoWidth * 4;
-    uint8_t* dst = static_cast<uint8_t*>(mappedData);
-    const uint8_t* src = frame->data[0];
-
-    for (UINT y = 0; y < videoHeight; ++y)
+    const int dstStride = m_videoFootprint.Footprint.RowPitch;
+    if (srcStride > 0 && srcStride == dstStride)
     {
-        memcpy(dst + y * m_videoFootprint.Footprint.RowPitch, src + y * frame->linesize[0], rowSize);
+        memcpy_s(m_mappedVideoData, m_videoUploadBufferSize, frame->data[0], m_videoUploadBufferSize);
+    }
+    else
+    {
+        // Copy BGRA pixels row by row
+        for (UINT y = 0; y < videoHeight; ++y)
+        {
+            const uint8_t* src = frame->data[0] + y * srcStride;
+            uint8_t* dst = static_cast<uint8_t*>(m_mappedVideoData) + y * dstStride;
+            memcpy_s(dst, rowBytes, src, rowBytes);
+        }
     }
 
-    // 5. Unmap the upload buffer
-    const D3D12_RANGE writtenRange = { 0, static_cast<SIZE_T>(m_videoUploadBufferSize) };
-    m_videoUploadBuffer->Unmap(0, &writtenRange);
-
-    // 6. Copy upload buffers to GPU textures
+    // Copy upload buffers to GPU texture
     return CopyVideoPlanesToGpu();
 }
 
@@ -275,7 +293,7 @@ HRESULT CD3D12Renderer::Render()
 
 void CD3D12Renderer::Shutdown()
 {
-    if (m_commandQueue && m_fence && m_fenceEvent.get())
+    if (m_commandQueue && m_fence && m_fenceEvent)
         WaitForGpu();
 
     m_renderCommandList.Reset();
@@ -291,6 +309,16 @@ void CD3D12Renderer::Shutdown()
     m_swapChain.Reset();
 
     m_fence.Reset();
+
+    if (m_videoUploadBuffer)
+    {
+        if (m_mappedVideoData)
+        {
+            m_videoUploadBuffer->Unmap(0, nullptr);
+            m_mappedVideoData = nullptr;
+        }
+        m_videoUploadBuffer.Reset();
+    }
 }
 
 HRESULT CD3D12Renderer::CreateCommandObjects()
@@ -341,34 +369,11 @@ HRESULT CD3D12Renderer::CreateFence()
     return S_OK;
 }
 
-HRESULT CD3D12Renderer::InitializeSwapChain(UINT width, UINT height)
-{
-    if (width == 0 || height == 0)
-        return E_INVALIDARG;
-
-    m_windowWidth = width;
-    m_windowHeight = height;
-
-    HRESULT hr = CreateSwapChain(m_hwnd);
-    if (FAILED(hr))
-        return hr;
-
-    hr = CreateRenderTargetViews();
-    if (FAILED(hr))
-        return hr;
-
-    hr = CreateVideoSrvHeap();
-    if (FAILED(hr))
-        return hr;
-
-    return S_OK;
-}
-
-HRESULT CD3D12Renderer::CreateSwapChain(HWND hwnd)
+HRESULT CD3D12Renderer::CreateSwapChain(HWND hwnd, UINT width, UINT height)
 {
     DXGI_SWAP_CHAIN_DESC1 desc{};
-    desc.Width = m_windowWidth;
-    desc.Height = m_windowHeight;
+    desc.Width = width;
+    desc.Height = height;
     desc.Format = BUFFER_FORMAT;
     desc.Stereo = FALSE;
     desc.SampleDesc.Count = 1;
@@ -431,7 +436,7 @@ HRESULT CD3D12Renderer::CreateRootSignature()
     // 1. Define SRV Descriptor Range
     D3D12_DESCRIPTOR_RANGE srvRange{};
     srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    srvRange.NumDescriptors = 3;
+    srvRange.NumDescriptors = 1;
     srvRange.BaseShaderRegister = 0;
     srvRange.RegisterSpace = 0;
     srvRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
@@ -658,6 +663,12 @@ HRESULT CD3D12Renderer::CreateVideoTexture(UINT width, UINT height)
         m_videoTexture.Reset();
         return hr;
     }
+
+    // Map upload buffer
+    D3D12_RANGE readRange{ 0, 0 };
+    hr = m_videoUploadBuffer->Map(0, &readRange, reinterpret_cast<void**>(&m_mappedVideoData));
+    if (FAILED(hr))
+        return hr;
 
     m_videoTexturesInShaderState = false;
 

@@ -38,8 +38,7 @@ public:
 private:
     HRESULT CreateCommandObjects();
     HRESULT CreateFence();
-    HRESULT InitializeSwapChain(UINT width, UINT height);
-    HRESULT CreateSwapChain(HWND hwnd);
+    HRESULT CreateSwapChain(HWND hwnd, UINT width, UINT height);
     HRESULT CreateRenderTargetViews();
     HRESULT CreateRootSignature();
     HRESULT CreatePipelineState();
@@ -74,6 +73,7 @@ private:
     // Texture
     ComPtr<ID3D12Resource> m_videoTexture;
     ComPtr<ID3D12Resource> m_videoUploadBuffer;
+    uint8_t* m_mappedVideoData{ nullptr };
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT m_videoFootprint{};
     UINT64 m_videoUploadBufferSize{ 0 };
     D3D12_CPU_DESCRIPTOR_HANDLE m_videoTextureSrvHandle{};
