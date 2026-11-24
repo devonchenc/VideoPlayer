@@ -90,13 +90,13 @@ HRESULT CD3D12Renderer::Resize(UINT width, UINT height)
     if (FAILED(hr))
         return hr;
 
-    m_windowWidth = width;
-    m_windowHeight = height;
-
-    // Recreate render target views.
+    // Recreate render target views
     hr = CreateRenderTargetViews();
     if (FAILED(hr))
         return hr;
+
+    m_windowWidth = width;
+    m_windowHeight = height;
 
     return S_OK;
 }
@@ -180,7 +180,7 @@ HRESULT CD3D12Renderer::UploadVideoFrame(AVFrame* frame)
         }
     }
 
-    // Copy upload buffers to GPU texture
+    // Copy upload buffer to GPU texture
     return CopyVideoPlanesToGpu();
 }
 
