@@ -60,7 +60,6 @@ private:
     // SwapChain Back Buffer RTVs
     ComPtr<ID3D12DescriptorHeap> m_rtvHeap;
     UINT m_rtvDescriptorSize{ 0 };
-    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, FRAME_COUNT> m_rtvHandles;
     std::array<ComPtr<ID3D12Resource>, FRAME_COUNT> m_renderTargets;
     std::array<FrameContext, FRAME_COUNT> m_frames;
     ComPtr<ID3D12GraphicsCommandList> m_renderCommandList;

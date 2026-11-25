@@ -423,8 +423,6 @@ HRESULT CD3D12Renderer::CreateRenderTargetViews()
 
         m_device->CreateRenderTargetView(m_renderTargets[i].Get(), nullptr, handle);
 
-        m_rtvHandles[i] = handle;
-
         handle.ptr += m_rtvDescriptorSize;
     }
 
