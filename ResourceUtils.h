@@ -19,7 +19,8 @@ enum class PlaybackState
 {
     Playing,
     Paused,
-    Stopped
+    Stopped,
+    Reconnecting
 };
 
 struct HandleDeleter

@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -16,6 +17,14 @@
 struct PlayerConfig
 {
     std::chrono::milliseconds videoBufferDurationMs{ 1000 };
+};
+
+enum class SessionResult
+{
+    Success,
+    ConnectionLost,
+    InitializationFailed,
+    Stopped
 };
 
 class CPlaybackEngine
@@ -47,6 +56,10 @@ public:
 private:
     void StartThreads();
     void DemuxThread(std::stop_token stopToken);
+    SessionResult RunSession(std::stop_token stopToken);
+    void CleanupSession();
+    std::chrono::seconds GetReconnectDelay(unsigned int attempt);
+    bool WaitForReconnect(std::stop_token stopToken, std::chrono::seconds delay);
     void VideoDecodeThread(std::stop_token stopToken);
     bool OpenInputStream(const std::string& url);
     bool OpenVideoDecoder();
@@ -83,6 +96,8 @@ private:
     std::jthread m_demuxThread;
     std::jthread m_videoDecodeThread;
     std::stop_source m_stopSource;
+    std::condition_variable_any m_reconnectCondition;
+    std::mutex m_reconnectMutex;
 
     // Video decoder thread only
     double m_videoNextPts{ 0.0 };
