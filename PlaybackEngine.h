@@ -48,10 +48,8 @@ private:
     void StartThreads();
     void DemuxThread(std::stop_token stopToken);
     void VideoDecodeThread(std::stop_token stopToken);
-
-    bool InitializeFFmpeg(const std::string& url);
-    bool InitializeVideoDecoder();
-
+    bool OpenInputStream(const std::string& url);
+    bool OpenVideoDecoder();
     bool DecodeVideoPacket(AVPacket* packet, std::stop_token stopToken);
     bool ReceiveVideoFrames(std::stop_token stopToken);
     bool FlushVideoDecoder(std::stop_token stopToken);
@@ -78,7 +76,7 @@ private:
     HandlePtr m_videoFrameEvent{ nullptr };
     HandlePtr m_stateChangedEvent{ nullptr };
 
-    CBlockingQueue<PacketPtr> m_videoPacketQueue{ 128 };
+    CBlockingQueue<PacketPtr> m_videoPacketQueue{ 60 };
     CBlockingQueue<VideoFrame> m_videoFrameQueue{ 30 };
 
     std::mutex m_membersMutex;

@@ -86,5 +86,5 @@ using SwsPtr = std::unique_ptr<SwsContext, SwsDeleter>;
 struct VideoFrame
 {
     FramePtr frame;
-    double pts{ 0.0 }; // normalized seconds
+    double pts{ 0.0 };
 };

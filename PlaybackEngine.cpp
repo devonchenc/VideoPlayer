@@ -167,7 +167,13 @@ void CPlaybackEngine::StartThreads()
 
 void CPlaybackEngine::DemuxThread(std::stop_token stopToken)
 {
-    if (!InitializeFFmpeg(m_url))
+    if (!OpenInputStream(m_url))
+    {
+        m_stopSource.request_stop();
+        return;
+    }
+
+    if (!OpenVideoDecoder())
     {
         m_stopSource.request_stop();
         return;
@@ -217,7 +223,7 @@ void CPlaybackEngine::VideoDecodeThread(std::stop_token stopToken)
     SetEvent(m_videoFrameEvent.get());
 }
 
-bool CPlaybackEngine::InitializeFFmpeg(const std::string& url)
+bool CPlaybackEngine::OpenInputStream(const std::string& url)
 {
     AVFormatContext* rawFormat = avformat_alloc_context();
     if (!rawFormat)
@@ -232,6 +238,8 @@ bool CPlaybackEngine::InitializeFFmpeg(const std::string& url)
     AVDictionary* options = nullptr;
     av_dict_set(&options, "rtsp_transport", "tcp", 0);
     av_dict_set(&options, "timeout", "5000000", 0);
+    av_dict_set(&options, "probesize", "10000000", 0);
+    av_dict_set(&options, "analyzeduration", "5000000", 0);
 
     const int openResult = avformat_open_input(&rawFormat, url.c_str(), nullptr, &options);
     av_dict_free(&options);
@@ -284,13 +292,10 @@ bool CPlaybackEngine::InitializeFFmpeg(const std::string& url)
         m_timestampOrigin = (earliest == std::numeric_limits<double>::max()) ? 0.0 : earliest;
     }
 
-    if (!InitializeVideoDecoder())
-        return false;
-
     return true;
 }
 
-bool CPlaybackEngine::InitializeVideoDecoder()
+bool CPlaybackEngine::OpenVideoDecoder()
 {
     const AVCodec* codec = avcodec_find_decoder(m_videoAVStream->codecpar->codec_id);
     if (!codec)
@@ -329,7 +334,7 @@ bool CPlaybackEngine::InitializeVideoDecoder()
     return true;
 }
 
-/* static */int CPlaybackEngine::InterruptCallback(void* opaque)
+/* static */ int CPlaybackEngine::InterruptCallback(void* opaque)
 {
     std::stop_token* token = static_cast<std::stop_token*>(opaque);
     return token->stop_requested() ? 1 : 0;
