@@ -123,7 +123,7 @@ HRESULT CD3D12Renderer::UploadVideoFrame(AVFrame* frame)
     if (!m_swapChain)
         return E_POINTER;
 
-    // Recreate resources if video format or size changes
+    // Recreate resources if video size changes
     if (!m_videoTexture || m_videoWidth != videoWidth || m_videoHeight != videoHeight)
     {
         // Wait for previous GPU usage before releasing old textures
@@ -312,7 +312,6 @@ void CD3D12Renderer::Shutdown()
 
     for (ComPtr<ID3D12Resource>& target : m_renderTargets)
         target.Reset();
-
 
     if (m_videoUploadBuffer)
     {
@@ -623,8 +622,16 @@ HRESULT CD3D12Renderer::CreateVideoTexture(UINT width, UINT height)
     if (width == 0 || height == 0)
         return E_INVALIDARG;
 
+    if (m_videoUploadBuffer)
+    {
+        if (m_mappedVideoData)
+        {
+            m_videoUploadBuffer->Unmap(0, nullptr);
+            m_mappedVideoData = nullptr;
+        }
+        m_videoUploadBuffer.Reset();
+    }
     m_videoTexture.Reset();
-    m_videoUploadBuffer.Reset();
 
     D3D12_RESOURCE_DESC textureDesc{};
     textureDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
