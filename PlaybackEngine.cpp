@@ -49,8 +49,6 @@ bool CPlaybackEngine::Initialize()
     m_videoPacketQueue.Reset();
     m_videoFrameQueue.Reset();
 
-    m_videoDone = false;
-
     m_videoNextPts = 0.0;
     m_videoNextPtsValid = false;
 
@@ -79,7 +77,6 @@ void CPlaybackEngine::Shutdown()
     m_videoStreamIndex = -1;
 
     m_videoClockStarted = false;
-    m_videoDone = false;
 }
 
 bool CPlaybackEngine::PlayLive(const std::string& url)
@@ -88,7 +85,7 @@ bool CPlaybackEngine::PlayLive(const std::string& url)
         return false;
 
     {
-        std::lock_guard lock(m_mutex);
+        std::lock_guard lock(m_membersMutex);
 
         m_url = url;
         m_streamType = StreamType::Live;
@@ -108,7 +105,7 @@ bool CPlaybackEngine::PlayRecorded(const std::string& url)
         return false;
 
     {
-        std::lock_guard lock(m_mutex);
+        std::lock_guard lock(m_membersMutex);
 
         m_url = url;
         m_streamType = StreamType::Recorded;
@@ -157,8 +154,6 @@ void CPlaybackEngine::PlayResume()
 
     m_playbackState = PlaybackState::Playing;
     SetEvent(m_stateChangedEvent.get());
-
-    NotifyDataReady();
 }
 
 void CPlaybackEngine::StartThreads()
@@ -219,8 +214,7 @@ void CPlaybackEngine::VideoDecodeThread(std::stop_token stopToken)
     if (!stopToken.stop_requested())
         FlushVideoDecoder(stopToken);
 
-    m_videoDone = true;
-    NotifyDataReady();
+    SetEvent(m_videoFrameEvent.get());
 }
 
 bool CPlaybackEngine::InitializeFFmpeg(const std::string& url)
@@ -412,7 +406,7 @@ bool CPlaybackEngine::ReceiveVideoFrames(std::stop_token stopToken)
         if (!m_videoFrameQueue.Push(std::move(output), stopToken))
             return false;
 
-        NotifyDataReady();
+        SetEvent(m_videoFrameEvent.get());
     }
 }
 
@@ -434,12 +428,6 @@ bool CPlaybackEngine::FlushVideoDecoder(std::stop_token stopToken)
     }
 
     return ReceiveVideoFrames(stopToken);
-}
-
-void CPlaybackEngine::NotifyDataReady()
-{
-    // Notify Render Thread
-    SetEvent(m_videoFrameEvent.get());
 }
 
 double CPlaybackEngine::NormalizeTimestamp(std::int64_t timestamp, AVRational timeBase) const
@@ -530,8 +518,11 @@ bool CPlaybackEngine::ConvertFrameToBGRA(AVFrame* srcFrame, AVFrame* rgbFrame)
     const int height = srcFrame->height;
     const AVPixelFormat srcFormat = static_cast<AVPixelFormat>(srcFrame->format);
 
+    bool isFullRange = false;
+    AVPixelFormat fixedSrcFormat = FixDeprecatedPixelFormat(srcFormat, isFullRange);
+
     // Update SwsContext if the source properties have changed
-    SwsContext* newCtx = sws_getCachedContext(m_swsContext.get(), width, height, srcFormat, width, height, AV_PIX_FMT_BGRA, SWS_BILINEAR, nullptr, nullptr, nullptr);
+    SwsContext* newCtx = sws_getCachedContext(m_swsContext.get(), width, height, fixedSrcFormat, width, height, AV_PIX_FMT_BGRA, SWS_BILINEAR, nullptr, nullptr, nullptr);
     if (newCtx != m_swsContext.get())
     {
         m_swsContext.release();
@@ -541,13 +532,21 @@ bool CPlaybackEngine::ConvertFrameToBGRA(AVFrame* srcFrame, AVFrame* rgbFrame)
     if (!m_swsContext)
         return false;
 
+    const int srcRange = isFullRange ? 1 : 0;
+    const int* coefficients = sws_getCoefficients(SWS_CS_DEFAULT);
+    int result = sws_setColorspaceDetails(m_swsContext.get(), coefficients, srcRange, coefficients, 1, 0, 1 << 16, 1 << 16);
+    if (result < 0)
+    {
+        return false;
+    }
+
     // Configure destination frame
     rgbFrame->format = AV_PIX_FMT_BGRA;
     rgbFrame->width = width;
     rgbFrame->height = height;
 
     // Allocate destination buffer
-    if (av_frame_get_buffer(rgbFrame, 32) < 0)
+    if (av_frame_get_buffer(rgbFrame, 0) < 0)
         return false;
 
     // Convert source frame to BGRA
@@ -559,4 +558,18 @@ bool CPlaybackEngine::ConvertFrameToBGRA(AVFrame* srcFrame, AVFrame* rgbFrame)
     }
 
     return true;
+}
+
+AVPixelFormat CPlaybackEngine::FixDeprecatedPixelFormat(AVPixelFormat format, bool& isFullRange) const
+{
+    isFullRange = false;
+
+    switch (format)
+    {
+    case AV_PIX_FMT_YUVJ420P:
+        isFullRange = true;
+        return AV_PIX_FMT_YUV420P;
+    default:
+        return format;
+    }
 }

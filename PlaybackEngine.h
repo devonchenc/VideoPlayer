@@ -55,44 +55,36 @@ private:
     bool DecodeVideoPacket(AVPacket* packet, std::stop_token stopToken);
     bool ReceiveVideoFrames(std::stop_token stopToken);
     bool FlushVideoDecoder(std::stop_token stopToken);
-    void NotifyDataReady();
-
     double NormalizeTimestamp(std::int64_t timestamp, AVRational timeBase) const;
     void PauseMasterClock();
     void ResumeMasterClock();
 
-    bool ConvertFrameToBGRA(AVFrame* srcFrame, AVFrame* rgbFrame);
     static int InterruptCallback(void* opaque);
     static void LogFFmpegError(const char* operation, int error);
     size_t GetMaxVideoFrameQueueSize() const;
+    bool ConvertFrameToBGRA(AVFrame* srcFrame, AVFrame* rgbFrame);
+    AVPixelFormat FixDeprecatedPixelFormat(AVPixelFormat format, bool& isFullRange) const;
 
 private:
     // FFmpeg objects
     FormatPtr m_formatContext;
     CodecPtr m_videoCodecContext;
-
+    SwsPtr m_swsContext{ nullptr };
     AVStream* m_videoAVStream{ nullptr };
     FramePtr m_decodedFrame;
-
     int m_videoStreamIndex{ -1 };
     double m_timestampOrigin{ 0.0 };
 
     HandlePtr m_videoFrameEvent{ nullptr };
     HandlePtr m_stateChangedEvent{ nullptr };
 
-    // Queues
     CBlockingQueue<PacketPtr> m_videoPacketQueue{ 128 };
     CBlockingQueue<VideoFrame> m_videoFrameQueue{ 30 };
 
-    SwsPtr m_swsContext{ nullptr };
-
-    // Worker threads
+    std::mutex m_membersMutex;
     std::jthread m_demuxThread;
     std::jthread m_videoDecodeThread;
     std::stop_source m_stopSource;
-    std::mutex m_mutex;
-
-    std::atomic<bool> m_videoDone{ false };
 
     // Video decoder thread only
     double m_videoNextPts{ 0.0 };
