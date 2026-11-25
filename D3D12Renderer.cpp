@@ -298,6 +298,14 @@ void CD3D12Renderer::Shutdown()
 
     m_renderCommandList.Reset();
     m_uploadCommandList.Reset();
+    m_rtvHeap.Reset();
+    m_swapChain.Reset();
+    m_rootSignature.Reset();
+    m_pipelineState.Reset();
+    m_videoSrvHeap.Reset();
+    m_uploadCommandAllocator.Reset();
+    m_videoTexture.Reset();
+    m_fence.Reset();
 
     for (FrameContext& frame : m_frames)
         frame.commandAllocator.Reset();
@@ -305,10 +313,6 @@ void CD3D12Renderer::Shutdown()
     for (ComPtr<ID3D12Resource>& target : m_renderTargets)
         target.Reset();
 
-    m_rtvHeap.Reset();
-    m_swapChain.Reset();
-
-    m_fence.Reset();
 
     if (m_videoUploadBuffer)
     {
