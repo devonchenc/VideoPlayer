@@ -569,6 +569,18 @@ AVPixelFormat CPlaybackEngine::FixDeprecatedPixelFormat(AVPixelFormat format, bo
     case AV_PIX_FMT_YUVJ420P:
         isFullRange = true;
         return AV_PIX_FMT_YUV420P;
+    case AV_PIX_FMT_YUVJ422P:
+        isFullRange = true;
+        return AV_PIX_FMT_YUV422P;
+    case AV_PIX_FMT_YUVJ444P:
+        isFullRange = true;
+        return AV_PIX_FMT_YUV444P;
+    case AV_PIX_FMT_YUVJ440P:
+        isFullRange = true;
+        return AV_PIX_FMT_YUV440P;
+    case AV_PIX_FMT_YUVJ411P:
+        isFullRange = true;
+        return AV_PIX_FMT_YUV411P;
     default:
         return format;
     }
