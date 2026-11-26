@@ -6,10 +6,11 @@
 
 namespace
 {
+    constexpr unsigned int BASE_DELAY_SECONDS = 1;
+    constexpr unsigned int MAX_DELAY_SECONDS = 15;
+    constexpr unsigned int MAX_RECONNECT_BACKOFF_EXPONENT = 4;
     constexpr size_t DEFAULT_VIDEO_FRAME_QUEUE_SIZE = 50;
     constexpr double DEFAULT_VIDEO_FRAME_RATE = 1.0 / 30.0;
-    constexpr unsigned int BASE_DELAY_SECONDS = 1;
-    constexpr unsigned int MAX_DELAY_SECONDS = 10;
 
     bool IsValidTimestamp(double value)
     {
@@ -53,7 +54,6 @@ bool CPlaybackEngine::Initialize()
 
     m_videoNextPts = 0.0;
     m_videoNextPtsValid = false;
-
     m_videoClockStarted = false;
 
     return true;
@@ -77,7 +77,8 @@ void CPlaybackEngine::Shutdown()
 
     m_videoAVStream = nullptr;
     m_videoStreamIndex = -1;
-
+    m_videoNextPts = 0.0;
+    m_videoNextPtsValid = false;
     m_videoClockStarted = false;
 }
 
@@ -135,7 +136,7 @@ void CPlaybackEngine::PlayPause()
     }
     else
     {
-        PauseMasterClock();
+        PauseVideoClock();
     }
 
     m_playbackState = PlaybackState::Paused;
@@ -151,7 +152,7 @@ void CPlaybackEngine::PlayResume()
     }
     else
     {
-        ResumeMasterClock();
+        ResumeVideoClock();
     }
 
     m_playbackState = PlaybackState::Playing;
@@ -162,20 +163,21 @@ void CPlaybackEngine::StartThreads()
 {
     m_stopSource = std::stop_source{};
     const std::stop_token token = m_stopSource.get_token();
-
     m_demuxThread = std::jthread([this, token]() { DemuxThread(token); });
 }
 
 void CPlaybackEngine::DemuxThread(std::stop_token stopToken)
 {
-    unsigned int reconnectAttempt = 0;
+    std::uint32_t reconnectAttempt = 0;
 
     while (!stopToken.stop_requested())
     {
         const std::chrono::steady_clock::time_point sessionStart = std::chrono::steady_clock::now();
 
+        m_playbackState = PlaybackState::Playing;
+
         const SessionResult result = RunSession(stopToken);
-        if (result == SessionResult::Stopped)
+        if (result == SessionResult::EndOfStream || result == SessionResult::Stopped)
             break;
 
         CleanupSession();
@@ -190,21 +192,13 @@ void CPlaybackEngine::DemuxThread(std::stop_token stopToken)
         if (sessionDuration >= std::chrono::seconds(MAX_DELAY_SECONDS))
             reconnectAttempt = 0;
 
-        const std::chrono::seconds delay = GetReconnectDelay(reconnectAttempt++);
-
-        {
-            std::wstring str = std::format(L"Reconnect after {} seconds.\n", delay.count());
-            OutputDebugStringW(str.c_str());
-        }
-
-        if (!WaitForReconnect(stopToken, delay))
+        if (!WaitForReconnect(stopToken, reconnectAttempt++))
             break;
 
         SetEvent(m_stateChangedEvent.get());
     }
 
-    m_playbackState = PlaybackState::Stopped;
-    SetEvent(m_stateChangedEvent.get());
+    m_videoPacketQueue.Close();
 }
 
 SessionResult CPlaybackEngine::RunSession(std::stop_token stopToken)
@@ -232,10 +226,14 @@ SessionResult CPlaybackEngine::RunSession(std::stop_token stopToken)
                 return SessionResult::Stopped;
 
             if (result == AVERROR_EOF)
+            {
+                return (m_streamType == StreamType::Live) ? SessionResult::ConnectionLost : SessionResult::EndOfStream;
+            }
+            else
+            {
+                LogFFmpegError("av_read_frame", result);
                 return SessionResult::ConnectionLost;
-
-            LogFFmpegError("av_read_frame", result);
-            return SessionResult::ConnectionLost;
+            }
         }
 
         if (packet->stream_index == m_videoStreamIndex)
@@ -255,50 +253,37 @@ SessionResult CPlaybackEngine::RunSession(std::stop_token stopToken)
 
 void CPlaybackEngine::CleanupSession()
 {
-    //Video Decode Thread	通知退出并 Join
-    //Video Packet Queue	清空旧 Packet (m_videoPacketQueue.Close())，重新开放 Queue  
-    //Video Frame Queue	清空旧 Frame
-    //AVCodecContext	释放
-    //AVFormatContext	关闭并释放
-    //Video Stream Index	重置
-    //AVStream Pointer	重置
-    //Timestamp Origin	重置
-    //Video Clock	重新初始化
     // Close the packet queue to wake up the decode thread
     m_videoPacketQueue.Close();
 
-    // Wait for the decode thread to exit.
+    // Wait for the decode thread to exit
     if (m_videoDecodeThread.joinable())
         m_videoDecodeThread.join();
 
     // Clear remaining queued packets and frames
     m_videoPacketQueue.Reset();
-    m_videoFrameQueue.Clear();
-
-    // Release FFmpeg resources.
+    m_videoFrameQueue.Reset();
     m_videoCodecContext.reset();
     m_formatContext.reset();
 
-    m_videoStreamIndex = -1;
     m_videoAVStream = nullptr;
-
-    // 还需要重新初始化video clock
+    m_videoStreamIndex = -1;
+    m_videoNextPts = 0.0;
+    m_videoNextPtsValid = false;
     m_videoClockStarted = false;
 }
 
-std::chrono::seconds CPlaybackEngine::GetReconnectDelay(unsigned int attempt)
+bool CPlaybackEngine::WaitForReconnect(std::stop_token stopToken, std::uint32_t attempt)
 {
-    const unsigned int exponent = std::min(attempt, 4u);
+    const unsigned int exponent = std::min(attempt, MAX_RECONNECT_BACKOFF_EXPONENT);
     const unsigned int delay = std::min(BASE_DELAY_SECONDS * (1u << exponent), MAX_DELAY_SECONDS);
 
-    return std::chrono::seconds(delay);
-}
+    std::wstring str = std::format(L"Scheduling reconnect attempt {} in {} seconds.\n", attempt + 1, delay);
+    OutputDebugString(str.c_str());
 
-bool CPlaybackEngine::WaitForReconnect(std::stop_token stopToken, std::chrono::seconds delay)
-{
     std::unique_lock lock(m_reconnectMutex);
 
-    m_reconnectCondition.wait_for(lock, stopToken, delay, [] { return false; });
+    m_reconnectCondition.wait_for(lock, stopToken, std::chrono::seconds(delay), [] { return false; });
 
     return !stopToken.stop_requested();
 }
@@ -504,11 +489,7 @@ bool CPlaybackEngine::ReceiveVideoFrames(std::stop_token stopToken)
         m_videoNextPts = pts + frameDuration;
         m_videoNextPtsValid = true;
 
-        VideoFrame output;
-        output.frame = std::move(rgbFrame);
-        output.pts = pts;
-
-        if (!m_videoFrameQueue.Push(std::move(output), stopToken))
+        if (!m_videoFrameQueue.Push(VideoFrame{ std::move(rgbFrame), pts }, stopToken))
             return false;
 
         SetEvent(m_videoFrameEvent.get());
@@ -543,7 +524,7 @@ double CPlaybackEngine::NormalizeTimestamp(std::int64_t timestamp, AVRational ti
         return static_cast<double>(timestamp) * av_q2d(timeBase) - m_timestampOrigin;
 }
 
-double CPlaybackEngine::GetMasterClock() const
+double CPlaybackEngine::GetVideoClock() const
 {
     if (!m_videoClockStarted)
         return 0.0;
@@ -556,16 +537,16 @@ double CPlaybackEngine::GetMasterClock() const
     return m_videoClockBasePts + elapsed;
 }
 
-void CPlaybackEngine::PauseMasterClock()
+void CPlaybackEngine::PauseVideoClock()
 {
-    if (m_clockPaused)
+    if (!m_videoClockStarted || m_clockPaused)
         return;
 
-    m_pausedClock = GetMasterClock();
+    m_pausedClock = GetVideoClock();
     m_clockPaused = true;
 }
 
-void CPlaybackEngine::ResumeMasterClock()
+void CPlaybackEngine::ResumeVideoClock()
 {
     if (!m_clockPaused)
         return;
@@ -573,6 +554,13 @@ void CPlaybackEngine::ResumeMasterClock()
     m_videoClockBasePts = m_pausedClock;
     m_videoClockBaseTime = std::chrono::steady_clock::now();
     m_clockPaused = false;
+}
+
+void CPlaybackEngine::UpdateVideoClock(double pts)
+{
+    m_videoClockBasePts = pts;
+    m_videoClockBaseTime = std::chrono::steady_clock::now();
+    m_videoClockStarted = true;
 }
 
 bool CPlaybackEngine::TryGetVideoFrame(VideoFrame& frame)

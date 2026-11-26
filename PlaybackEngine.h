@@ -21,7 +21,7 @@ struct PlayerConfig
 
 enum class SessionResult
 {
-    Success,
+    EndOfStream,
     ConnectionLost,
     InitializationFailed,
     Stopped
@@ -48,7 +48,8 @@ public:
     void PlayResume();
 
     bool TryGetVideoFrame(VideoFrame& frame);
-    double GetMasterClock() const;
+    double GetVideoClock() const;
+    void UpdateVideoClock(double pts);
     HANDLE GetVideoFrameEvent() const { return m_videoFrameEvent.get(); }
     HANDLE GetStateChangedEvent() const { return m_stateChangedEvent.get(); }
     PlaybackState GetPlaybackState() const { return m_playbackState; }
@@ -58,8 +59,7 @@ private:
     void DemuxThread(std::stop_token stopToken);
     SessionResult RunSession(std::stop_token stopToken);
     void CleanupSession();
-    std::chrono::seconds GetReconnectDelay(unsigned int attempt);
-    bool WaitForReconnect(std::stop_token stopToken, std::chrono::seconds delay);
+    bool WaitForReconnect(std::stop_token stopToken, std::uint32_t attempt);
     void VideoDecodeThread(std::stop_token stopToken);
     bool OpenInputStream(const std::string& url);
     bool OpenVideoDecoder();
@@ -67,8 +67,8 @@ private:
     bool ReceiveVideoFrames(std::stop_token stopToken);
     bool FlushVideoDecoder(std::stop_token stopToken);
     double NormalizeTimestamp(std::int64_t timestamp, AVRational timeBase) const;
-    void PauseMasterClock();
-    void ResumeMasterClock();
+    void PauseVideoClock();
+    void ResumeVideoClock();
 
     static int InterruptCallback(void* opaque);
     static void LogFFmpegError(const char* operation, int error);
@@ -77,12 +77,11 @@ private:
     AVPixelFormat FixDeprecatedPixelFormat(AVPixelFormat format, bool& isFullRange) const;
 
 private:
-    // FFmpeg objects
-    FormatPtr m_formatContext;
-    CodecPtr m_videoCodecContext;
+    FormatPtr m_formatContext{ nullptr };
+    CodecPtr m_videoCodecContext{ nullptr };
     SwsPtr m_swsContext{ nullptr };
     AVStream* m_videoAVStream{ nullptr };
-    FramePtr m_decodedFrame;
+    FramePtr m_decodedFrame{ nullptr };
     int m_videoStreamIndex{ -1 };
     double m_timestampOrigin{ 0.0 };
 

@@ -236,8 +236,8 @@ void CPlayerInstance::ProcessVideoFrames()
             m_pendingVideoFrame = std::move(frame);
         }
 
-        const double masterClock = m_playbackEngine->GetMasterClock();
-        const double difference = m_pendingVideoFrame->pts - masterClock;
+        const double videoClock = m_playbackEngine->GetVideoClock();
+        const double difference = m_pendingVideoFrame->pts - videoClock;
 
         // Frame is too early
         if (difference > EARLY_FRAME_THRESHOLD_SECONDS)
@@ -254,14 +254,14 @@ void CPlayerInstance::ProcessVideoFrames()
         const HRESULT hr = m_renderer->UploadVideoFrame(m_pendingVideoFrame->frame.get());
         if (FAILED(hr))
         {
-            // Handle rendering errors
-            //HandleRenderError(hr);
-
+            OutputDebugString(L"Failed to upload video frame.\n");
             m_pendingVideoFrame.reset();
             return;
         }
 
         m_renderer->Render();
+
+        m_playbackEngine->UpdateVideoClock(m_pendingVideoFrame->pts);
 
         // Frame has been submitted for rendering
         m_pendingVideoFrame.reset();
@@ -279,7 +279,7 @@ DWORD CPlayerInstance::CalculateNextWakeUpTimeout() const
     if (!m_pendingVideoFrame)
         return INFINITE;
 
-    const double difference = m_pendingVideoFrame->pts - m_playbackEngine->GetMasterClock();
+    const double difference = m_pendingVideoFrame->pts - m_playbackEngine->GetVideoClock();
     const double waitSeconds = difference - EARLY_FRAME_THRESHOLD_SECONDS;
     if (waitSeconds <= 0.0)
         return 0;
